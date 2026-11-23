@@ -1,6 +1,6 @@
 mod common;
 use common::{Rosenbrock, close, v};
-use nlopt::{Error, Matrix, Options, Status, Vector, least_squares::*, trust_region::*};
+use nlopt4r::{Error, Matrix, Options, Status, Vector, least_squares::*, trust_region::*};
 
 fn assert_trust_kkt(g: &Vector, b: &Matrix, radius: f64) {
     let r = subproblem(g, b, radius).unwrap();

@@ -1,6 +1,6 @@
 mod common;
 use common::v;
-use nlopt::{Error, Status, Vector, line_search::*};
+use nlopt4r::{Error, Status, Vector, line_search::*};
 
 #[test]
 fn armijo_satisfies_actual_sufficient_decrease() {

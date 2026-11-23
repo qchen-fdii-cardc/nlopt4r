@@ -1,4 +1,4 @@
-# nlopt
+# nlopt4r
 
 A reusable, pure-Rust library implementing the optimization families in
 the adjacent [MATLAB programs](../Matlab程序/). This is an educational dense
@@ -10,11 +10,11 @@ Add a path dependency (adjust the path to your checkout):
 
 ```toml
 [dependencies]
-nlopt = { path = "../optimization/nlopt" }
+nlopt4r = { path = "../optimization/nlopt" }
 ```
 
 ```rust
-use nlopt::{minimize, Method, Options, Vector};
+use nlopt4r::{minimize, Method, Options, Vector};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = Vector::from_vec(vec![3.0, -2.0]);

@@ -1,6 +1,6 @@
 mod common;
 use common::{Rosenbrock, close, v};
-use nlopt::{Error, Matrix, Method, Objective, Options, Status, Vector, minimize};
+use nlopt4r::{Error, Matrix, Method, Objective, Options, Status, Vector, minimize};
 
 fn methods() -> [Method; 11] {
     [

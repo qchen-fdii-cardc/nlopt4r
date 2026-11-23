@@ -4,7 +4,7 @@
 //! Functions and closures can carry borrowed application data; no global state is used.
 //!
 //! ```
-//! use nlopt::{minimize, Method, Options, Vector};
+//! use nlopt4r::{minimize, Method, Options, Vector};
 //! let problem = (
 //!     |x: &Vector| (x[0] - 3.0).powi(2),
 //!     |x: &Vector| Vector::from_vec(vec![2.0 * (x[0] - 3.0)]),
@@ -12,7 +12,7 @@
 //! let result = minimize(&problem, &Vector::zeros(1), Method::Bfgs, &Options::default())?;
 //! assert!(result.converged());
 //! assert!((result.x[0] - 3.0).abs() < 1e-6);
-//! # Ok::<(), nlopt::Error>(())
+//! # Ok::<(), nlopt4r::Error>(())
 //! ```
 
 pub mod constrained;

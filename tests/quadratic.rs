@@ -1,6 +1,6 @@
 mod common;
 use common::{close, v};
-use nlopt::{Error, Matrix, Options, Status, Vector, quadratic::*};
+use nlopt4r::{Error, Matrix, Options, Status, Vector, quadratic::*};
 
 fn check_kkt(qp: &QuadraticProgram, r: &QuadraticSolution) {
     assert!(r.solution.converged(), "{r:?}");

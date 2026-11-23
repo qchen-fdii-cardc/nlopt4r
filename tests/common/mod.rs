@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use nlopt::{Matrix, Objective, Vector};
+use nlopt4r::{Matrix, Objective, Vector};
 
 pub struct Rosenbrock;
 impl Objective for Rosenbrock {

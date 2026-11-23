@@ -1,4 +1,4 @@
-use nlopt::{Matrix, Method, Options, Vector, minimize};
+use nlopt4r::{Matrix, Method, Options, Vector, minimize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let problem = (

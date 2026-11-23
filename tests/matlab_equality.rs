@@ -1,6 +1,6 @@
 mod common;
 use common::v;
-use nlopt::{
+use nlopt4r::{
     Matrix, Objective, Vector,
     constrained::{self, ConstrainedOptions, ConstrainedProblem, Constraints, Method},
 };
@@ -131,7 +131,7 @@ impl ConstrainedProblem for FourVariable {
 fn root_matlab_four_variable_example_agrees_with_direct_qp() {
     let options = ConstrainedOptions::default();
     let c = FourVariable.constraints(&Vector::zeros(4));
-    let qp = nlopt::quadratic::QuadraticProgram {
+    let qp = nlopt4r::quadratic::QuadraticProgram {
         hessian: 2.0 * Matrix::identity(4, 4),
         linear: v(&[-2.0, 0.0, 0.0, -3.0]),
         equalities: c.equality_jacobian,
@@ -139,7 +139,7 @@ fn root_matlab_four_variable_example_agrees_with_direct_qp() {
         inequalities: c.inequality_jacobian,
         inequality_rhs: -c.inequalities,
     };
-    let expected = nlopt::quadratic::minimize(&qp, &Vector::zeros(4), &options.solver).unwrap();
+    let expected = nlopt4r::quadratic::minimize(&qp, &Vector::zeros(4), &options.solver).unwrap();
     for r in [
         constrained::minimize(&FourVariable, &Vector::zeros(4), Method::Sqp, &options).unwrap(),
         constrained::augmented_lagrangian(&FourVariable, &Vector::zeros(4), &options).unwrap(),

@@ -1,6 +1,6 @@
 mod common;
 use common::{close, v};
-use nlopt::{Error, Matrix, Objective, Options, Status, Vector, constrained::*};
+use nlopt4r::{Error, Matrix, Objective, Options, Status, Vector, constrained::*};
 
 struct Ellipse;
 impl Objective for Ellipse {
