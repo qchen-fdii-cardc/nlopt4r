@@ -65,6 +65,13 @@ impl QuadraticProgram {
 }
 
 fn least_norm(a: &Matrix, b: &Vector) -> Result<Vector, Error> {
+    if a.is_square()
+        && let Some(x) = a.clone().full_piv_lu().solve(b)
+        && x.iter().all(|v| v.is_finite())
+        && (a * &x - b).norm() <= 1e-10 * (1.0 + b.norm())
+    {
+        return Ok(x);
+    }
     let tolerance = 1e-12 * a.norm().max(1.0);
     let x = a
         .clone()
@@ -208,7 +215,13 @@ fn active_set(
     for k in 0..=options.max_iterations {
         let a = working_matrix(qp, &active);
         let g = &qp.hessian * &x + &qp.linear;
-        let (d, lam) = kkt(&qp.hessian, &g, &a, &Vector::zeros(a.nrows()))?;
+        let mut rhs = Vector::zeros(a.nrows());
+        rhs.rows_mut(0, ne).copy_from(&qp.equality_rhs);
+        for (j, &i) in active.iter().enumerate() {
+            rhs[ne + j] = qp.inequality_rhs[i];
+        }
+        rhs -= &a * &x;
+        let (d, lam) = kkt(&qp.hessian, &g, &a, &rhs)?;
         let mu = lam.rows(0, ne).into_owned();
         let mut lambda = Vector::zeros(ni);
         for (j, &i) in active.iter().enumerate() {
@@ -226,8 +239,8 @@ fn active_set(
         if k == options.max_iterations {
             return report(qp, x, mu, lambda, k, Status::MaxIterations);
         }
-        if stationary && negative.is_some() {
-            active.remove(negative.expect("negative multiplier checked").0);
+        if stationary && let Some((index, _)) = negative {
+            active.remove(index);
             continue;
         }
         let slack = &qp.inequalities * &x - &qp.inequality_rhs;
