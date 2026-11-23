@@ -1,0 +1,9 @@
+[package]
+name = "nlopt"
+version = "0.1.0"
+edition = "2024"
+description = "Dense educational nonlinear optimization algorithms translated from MATLAB"
+readme = "README.md"
+
+[dependencies]
+nalgebra = "0.34"
