@@ -4,8 +4,12 @@ use nlopt::{Error, Matrix, Objective, Options, Status, Vector, constrained::*};
 
 struct Ellipse;
 impl Objective for Ellipse {
-    fn value(&self, x: &Vector) -> f64 { (x[0] - 2.0).powi(2) + (x[1] - 1.0).powi(2) }
-    fn gradient(&self, x: &Vector) -> Vector { v(&[2.0 * (x[0] - 2.0), 2.0 * (x[1] - 1.0)]) }
+    fn value(&self, x: &Vector) -> f64 {
+        (x[0] - 2.0).powi(2) + (x[1] - 1.0).powi(2)
+    }
+    fn gradient(&self, x: &Vector) -> Vector {
+        v(&[2.0 * (x[0] - 2.0), 2.0 * (x[1] - 1.0)])
+    }
 }
 impl ConstrainedProblem for Ellipse {
     fn constraints(&self, x: &Vector) -> Constraints {
@@ -20,7 +24,9 @@ impl ConstrainedProblem for Ellipse {
 
 struct Cylinder;
 impl Objective for Cylinder {
-    fn value(&self, x: &Vector) -> f64 { -std::f64::consts::PI * x[0] * x[0] * x[1] }
+    fn value(&self, x: &Vector) -> f64 {
+        -std::f64::consts::PI * x[0] * x[0] * x[1]
+    }
     fn gradient(&self, x: &Vector) -> Vector {
         let pi = std::f64::consts::PI;
         v(&[-2.0 * pi * x[0] * x[1], -pi * x[0] * x[0]])
@@ -32,7 +38,11 @@ impl ConstrainedProblem for Cylinder {
         Constraints {
             equalities: v(&[pi * x[0] * x[1] + pi * x[0] * x[0] - 150.0]),
             inequalities: x.clone(),
-            equality_jacobian: Matrix::from_row_slice(1, 2, &[pi * x[1] + 2.0 * pi * x[0], pi * x[0]]),
+            equality_jacobian: Matrix::from_row_slice(
+                1,
+                2,
+                &[pi * x[1] + 2.0 * pi * x[0], pi * x[0]],
+            ),
             inequality_jacobian: Matrix::identity(2, 2),
         }
     }
@@ -40,8 +50,12 @@ impl ConstrainedProblem for Cylinder {
 
 struct EqualityCircle;
 impl Objective for EqualityCircle {
-    fn value(&self, x: &Vector) -> f64 { -x[0] - x[1] }
-    fn gradient(&self, _: &Vector) -> Vector { v(&[-1.0, -1.0]) }
+    fn value(&self, x: &Vector) -> f64 {
+        -x[0] - x[1]
+    }
+    fn gradient(&self, _: &Vector) -> Vector {
+        v(&[-1.0, -1.0])
+    }
 }
 impl ConstrainedProblem for EqualityCircle {
     fn constraints(&self, x: &Vector) -> Constraints {
@@ -57,10 +71,19 @@ impl ConstrainedProblem for EqualityCircle {
 
 fn check(r: &ConstrainedSolution, options: &ConstrainedOptions) {
     assert!(r.solution.converged(), "{r:?}");
-    assert!(r.solution.gradient_norm <= options.solver.gradient_tolerance, "{r:?}");
-    assert!(r.constraint_violation <= options.feasibility_tolerance, "{r:?}");
+    assert!(
+        r.solution.gradient_norm <= options.solver.gradient_tolerance,
+        "{r:?}"
+    );
+    assert!(
+        r.constraint_violation <= options.feasibility_tolerance,
+        "{r:?}"
+    );
     assert!(r.complementarity <= options.feasibility_tolerance, "{r:?}");
-    assert!(r.inequality_multipliers.iter().all(|v| *v >= -1e-8), "{r:?}");
+    assert!(
+        r.inequality_multipliers.iter().all(|v| *v >= -1e-8),
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -80,7 +103,11 @@ fn sqp_solves_matlab_ellipse() {
     let options = ConstrainedOptions::default();
     let r = minimize(&Ellipse, &v(&[0.5, 0.75]), Method::Sqp, &options).unwrap();
     check(&r, &options);
-    close(&r.solution.x, &[0.5 * (7.0_f64.sqrt() - 1.0), 0.25 * (7.0_f64.sqrt() + 1.0)], 1e-5);
+    close(
+        &r.solution.x,
+        &[0.5 * (7.0_f64.sqrt() - 1.0), 0.25 * (7.0_f64.sqrt() + 1.0)],
+        1e-5,
+    );
 }
 
 #[test]
@@ -110,8 +137,12 @@ fn equality_sqp_newton_and_phr_solve_nonlinear_constraint() {
 
 struct InactiveInequality;
 impl Objective for InactiveInequality {
-    fn value(&self, x: &Vector) -> f64 { 0.5 * (x[0] - 2.0).powi(2) }
-    fn gradient(&self, x: &Vector) -> Vector { v(&[x[0] - 2.0]) }
+    fn value(&self, x: &Vector) -> f64 {
+        0.5 * (x[0] - 2.0).powi(2)
+    }
+    fn gradient(&self, x: &Vector) -> Vector {
+        v(&[x[0] - 2.0])
+    }
 }
 impl ConstrainedProblem for InactiveInequality {
     fn constraints(&self, x: &Vector) -> Constraints {
@@ -138,24 +169,39 @@ fn inactive_inequality_uses_projected_phr_gradient() {
 
 #[test]
 fn constrained_budget_and_invalid_inputs() {
-    let options = ConstrainedOptions { solver: Options { max_iterations: 0, ..Options::default() }, ..ConstrainedOptions::default() };
+    let options = ConstrainedOptions {
+        solver: Options {
+            max_iterations: 0,
+            ..Options::default()
+        },
+        ..ConstrainedOptions::default()
+    };
     let r = augmented_lagrangian(&Ellipse, &v(&[0.0, 0.0]), &options).unwrap();
     assert_eq!(r.solution.status, Status::MaxIterations);
     let r = minimize(&Ellipse, &v(&[0.0, 0.0]), Method::Sqp, &options).unwrap();
     assert_eq!(r.solution.status, Status::MaxIterations);
-    assert!(matches!(minimize(&Ellipse, &v(&[0.5, 0.75]), Method::NewtonLagrange, &options), Err(Error::InvalidInput(_))));
+    assert!(matches!(
+        minimize(&Ellipse, &v(&[0.5, 0.75]), Method::NewtonLagrange, &options),
+        Err(Error::InvalidInput(_))
+    ));
 }
 
 struct BadConstraint;
 impl Objective for BadConstraint {
-    fn value(&self, x: &Vector) -> f64 { x.norm_squared() }
-    fn gradient(&self, x: &Vector) -> Vector { 2.0 * x }
+    fn value(&self, x: &Vector) -> f64 {
+        x.norm_squared()
+    }
+    fn gradient(&self, x: &Vector) -> Vector {
+        2.0 * x
+    }
 }
 impl ConstrainedProblem for BadConstraint {
     fn constraints(&self, _: &Vector) -> Constraints {
         Constraints {
-            equalities: v(&[0.0]), inequalities: Vector::zeros(0),
-            equality_jacobian: Matrix::zeros(2, 2), inequality_jacobian: Matrix::zeros(0, 2),
+            equalities: v(&[0.0]),
+            inequalities: Vector::zeros(0),
+            equality_jacobian: Matrix::zeros(2, 2),
+            inequality_jacobian: Matrix::zeros(0, 2),
         }
     }
 }
@@ -163,7 +209,22 @@ impl ConstrainedProblem for BadConstraint {
 #[test]
 fn malformed_constraint_jacobian_is_error_not_panic() {
     for method in [Method::Sqp, Method::NewtonLagrange] {
-        assert!(matches!(minimize(&BadConstraint, &v(&[1.0, 1.0]), method, &ConstrainedOptions::default()), Err(Error::DimensionMismatch(_))));
+        assert!(matches!(
+            minimize(
+                &BadConstraint,
+                &v(&[1.0, 1.0]),
+                method,
+                &ConstrainedOptions::default()
+            ),
+            Err(Error::DimensionMismatch(_))
+        ));
     }
-    assert!(matches!(augmented_lagrangian(&BadConstraint, &v(&[1.0, 1.0]), &ConstrainedOptions::default()), Err(Error::DimensionMismatch(_))));
+    assert!(matches!(
+        augmented_lagrangian(
+            &BadConstraint,
+            &v(&[1.0, 1.0]),
+            &ConstrainedOptions::default()
+        ),
+        Err(Error::DimensionMismatch(_))
+    ));
 }

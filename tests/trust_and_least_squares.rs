@@ -8,9 +8,14 @@ fn assert_trust_kkt(g: &Vector, b: &Matrix, radius: f64) {
     assert!(r.multiplier >= 0.0);
     let stationarity = (b + r.multiplier * Matrix::identity(g.len(), g.len())) * &r.step + g;
     assert!(stationarity.norm() < 1e-7, "{r:?}, residual={stationarity}");
-    assert!((r.multiplier * (r.step.norm() - radius)).abs() < 1e-7, "{r:?}");
+    assert!(
+        (r.multiplier * (r.step.norm() - radius)).abs() < 1e-7,
+        "{r:?}"
+    );
     assert!(r.value <= 1e-10);
-    let eigen = (b + r.multiplier * Matrix::identity(g.len(), g.len())).symmetric_eigen().eigenvalues;
+    let eigen = (b + r.multiplier * Matrix::identity(g.len(), g.len()))
+        .symmetric_eigen()
+        .eigenvalues;
     assert!(eigen.min() >= -1e-8);
 }
 
@@ -37,7 +42,13 @@ fn trust_region_solves_rosenbrock_and_reports_limits() {
         close(&r.x, &[1.0, 1.0], 1e-5);
         assert!(r.value < 1e-12);
     }
-    let options = TrustRegionOptions { solver: Options { max_iterations: 0, ..Options::default() }, ..options };
+    let options = TrustRegionOptions {
+        solver: Options {
+            max_iterations: 0,
+            ..Options::default()
+        },
+        ..options
+    };
     let r = minimize(&Rosenbrock, &v(&[-1.2, 1.0]), &options).unwrap();
     assert_eq!(r.status, Status::MaxIterations);
 }
@@ -46,21 +57,39 @@ fn trust_region_solves_rosenbrock_and_reports_limits() {
 fn trust_region_validates_hessians_radii_and_missing_derivatives() {
     assert!(subproblem(&v(&[1.0]), &Matrix::identity(1, 1), 0.0).is_err());
     assert!(subproblem(&v(&[1.0]), &Matrix::identity(2, 2), 1.0).is_err());
-    assert!(subproblem(&v(&[1.0, 1.0]), &Matrix::from_row_slice(2, 2, &[1.0, 3.0, 0.0, 1.0]), 1.0).is_err());
+    assert!(
+        subproblem(
+            &v(&[1.0, 1.0]),
+            &Matrix::from_row_slice(2, 2, &[1.0, 3.0, 0.0, 1.0]),
+            1.0
+        )
+        .is_err()
+    );
     let p = (|x: &Vector| x.norm_squared(), |x: &Vector| 2.0 * x);
-    assert_eq!(minimize(&p, &v(&[1.0]), &TrustRegionOptions::default()).unwrap_err(), Error::MissingHessian);
+    assert_eq!(
+        minimize(&p, &v(&[1.0]), &TrustRegionOptions::default()).unwrap_err(),
+        Error::MissingHessian
+    );
 }
 
 fn residual(x: &Vector) -> Vector {
-    v(&[x[0] - 0.7 * x[0].sin() - 0.2 * x[1].cos(),
-        x[1] - 0.7 * x[0].cos() + 0.2 * x[1].sin()])
+    v(&[
+        x[0] - 0.7 * x[0].sin() - 0.2 * x[1].cos(),
+        x[1] - 0.7 * x[0].cos() + 0.2 * x[1].sin(),
+    ])
 }
 
 fn jacobian(x: &Vector) -> Matrix {
-    Matrix::from_row_slice(2, 2, &[
-        1.0 - 0.7 * x[0].cos(), 0.2 * x[1].sin(),
-        0.7 * x[0].sin(), 1.0 + 0.2 * x[1].cos(),
-    ])
+    Matrix::from_row_slice(
+        2,
+        2,
+        &[
+            1.0 - 0.7 * x[0].cos(),
+            0.2 * x[1].sin(),
+            0.7 * x[0].sin(),
+            1.0 + 0.2 * x[1].cos(),
+        ],
+    )
 }
 
 #[test]
@@ -94,10 +123,16 @@ fn lm_overdetermined_inconsistent_system_and_rank_deficient_jacobian() {
 
 #[test]
 fn lm_rejects_invalid_callbacks_and_handles_initial_root() {
-    let p = (|_: &Vector| Vector::zeros(0), |_: &Vector| Matrix::zeros(0, 1));
+    let p = (
+        |_: &Vector| Vector::zeros(0),
+        |_: &Vector| Matrix::zeros(0, 1),
+    );
     assert!(levenberg_marquardt(&p, &v(&[0.0]), &Options::default()).is_err());
     let p = (|_: &Vector| v(&[1.0]), |_: &Vector| Matrix::zeros(2, 1));
-    assert!(matches!(levenberg_marquardt(&p, &v(&[0.0]), &Options::default()), Err(Error::DimensionMismatch(_))));
+    assert!(matches!(
+        levenberg_marquardt(&p, &v(&[0.0]), &Options::default()),
+        Err(Error::DimensionMismatch(_))
+    ));
     let p = (|x: &Vector| x.clone(), |_: &Vector| Matrix::identity(1, 1));
     let r = levenberg_marquardt(&p, &v(&[0.0]), &Options::default()).unwrap();
     assert!(r.converged());

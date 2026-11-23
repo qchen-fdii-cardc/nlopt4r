@@ -34,7 +34,9 @@ pub struct TrustRegionStep {
 /// Handles indefinite B and the zero-gradient "hard case".
 pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep, Error> {
     positive(radius, "trust radius")?;
-    if g.is_empty() { return Err(Error::InvalidInput("empty gradient")); }
+    if g.is_empty() {
+        return Err(Error::InvalidInput("empty gradient"));
+    }
     vector(g, g.len(), "gradient")?;
     symmetric(b, g.len())?;
     let eig = b.clone().symmetric_eigen();
@@ -49,7 +51,9 @@ pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep
         for i in 0..g.len() {
             let denom = eig.eigenvalues[i] + lambda;
             if denom.abs() <= eps {
-                if c[i].abs() > 1e-12 * (1.0 + g.norm()) { return None; }
+                if c[i].abs() > 1e-12 * (1.0 + g.norm()) {
+                    return None;
+                }
             } else {
                 z[i] = -c[i] / denom;
             }
@@ -72,18 +76,27 @@ pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep
         }
         for _ in 0..120 {
             let mid = lo + 0.5 * (hi - lo);
-            if coordinates(mid).is_none_or(|z| z.norm() > radius) { lo = mid; }
-            else { hi = mid; }
+            if coordinates(mid).is_none_or(|z| z.norm() > radius) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
         }
         (coordinates(hi).ok_or(Error::SingularSystem)?, hi)
     };
     let step = &eig.eigenvectors * z;
     let value = finite(g.dot(&step) + 0.5 * step.dot(&(b * &step)), "trust model")?;
-    Ok(TrustRegionStep { step, value, multiplier })
+    Ok(TrustRegionStep {
+        step,
+        value,
+        multiplier,
+    })
 }
 
 pub fn minimize<P: Objective + ?Sized>(
-    problem: &P, x0: &Vector, options: &TrustRegionOptions,
+    problem: &P,
+    x0: &Vector,
+    options: &TrustRegionOptions,
 ) -> Result<Solution, Error> {
     initial(x0, &options.solver)?;
     positive(options.initial_radius, "initial trust radius")?;
@@ -109,11 +122,14 @@ pub fn minimize<P: Objective + ?Sized>(
         vector(&trial, x.len(), "trust iterate")?;
         let next_f = finite(problem.value(&trial), "objective")?;
         let ratio = (f - next_f) / -step.value;
-        if ratio <= options.acceptance_threshold { radius *= 0.5; }
-        else if ratio >= 0.75 && step.step.norm() >= 0.99 * radius {
+        if ratio <= options.acceptance_threshold {
+            radius *= 0.5;
+        } else if ratio >= 0.75 && step.step.norm() >= 0.99 * radius {
             radius = (2.0 * radius).min(options.maximum_radius);
         }
-        if ratio > options.acceptance_threshold { x = trial; }
+        if ratio > options.acceptance_threshold {
+            x = trial;
+        }
         positive(radius, "trust radius underflow")?;
     }
     unreachable!()

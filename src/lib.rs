@@ -207,17 +207,18 @@ pub(crate) fn evaluate<P: Objective + ?Sized>(
     Ok((f, g))
 }
 
-pub(crate) fn hessian<P: Objective + ?Sized>(
-    p: &P,
-    x: &Vector<f64>,
-) -> Result<Matrix<f64>, Error> {
+pub(crate) fn hessian<P: Objective + ?Sized>(p: &P, x: &Vector<f64>) -> Result<Matrix<f64>, Error> {
     let h = p.hessian(x).ok_or(Error::MissingHessian)?;
     symmetric(&h, x.len())?;
     Ok(h)
 }
 
 pub(crate) fn solve(a: &Matrix<f64>, b: &Vector<f64>) -> Result<Vector<f64>, Error> {
-    let x = a.clone().full_piv_lu().solve(b).ok_or(Error::SingularSystem)?;
+    let x = a
+        .clone()
+        .full_piv_lu()
+        .solve(b)
+        .ok_or(Error::SingularSystem)?;
     vector(&x, b.len(), "linear solve")?;
     if (a * &x - b).norm() > 1e-7 * (1.0 + b.norm()) {
         return Err(Error::SingularSystem);
@@ -237,6 +238,10 @@ pub(crate) fn solution(
         value,
         gradient_norm,
         iterations,
-        status: if converged { Status::Converged } else { Status::MaxIterations },
+        status: if converged {
+            Status::Converged
+        } else {
+            Status::MaxIterations
+        },
     }
 }

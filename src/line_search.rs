@@ -30,7 +30,9 @@ impl ArmijoOptions {
             return Err(Error::InvalidInput("sufficient decrease must be in (0, 1)"));
         }
         if self.max_iterations == 0 {
-            return Err(Error::InvalidInput("line search iteration limit must be positive"));
+            return Err(Error::InvalidInput(
+                "line search iteration limit must be positive",
+            ));
         }
         Ok(())
     }
@@ -74,13 +76,19 @@ where
 {
     finite(slope, "directional derivative")?;
     if slope >= 0.0 {
-        return Err(Error::InvalidInput("line search requires a descent direction"));
+        return Err(Error::InvalidInput(
+            "line search requires a descent direction",
+        ));
     }
     let mut alpha = options.initial_step;
     for k in 0..options.max_iterations {
         let next = trial(alpha)?;
         if next <= value + options.sufficient_decrease * alpha * slope {
-            return Ok(Step { alpha, value: next, evaluations: k + 1 });
+            return Ok(Step {
+                alpha,
+                value: next,
+                evaluations: k + 1,
+            });
         }
         alpha *= options.contraction;
     }
@@ -140,7 +148,11 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
             let q = (x - v) * (fx - fw);
             let mut p = (x - v) * q - (x - w) * r;
             let mut q = 2.0 * (q - r);
-            if q > 0.0 { p = -p; } else { q = -q; }
+            if q > 0.0 {
+                p = -p;
+            } else {
+                q = -q;
+            }
             let previous = e;
             e = d;
             if p.abs() < (0.5 * q * previous).abs() && p > q * (a - x) && p < q * (b - x) {
@@ -156,17 +168,40 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
             e = if x < mid { b - x } else { a - x };
             d = golden * e;
         }
-        let u = x + if d.abs() >= tol { d } else if d >= 0.0 { tol } else { -tol };
+        let u = x + if d.abs() >= tol {
+            d
+        } else if d >= 0.0 {
+            tol
+        } else {
+            -tol
+        };
         let fu = eval(u)?;
         if fu <= fx {
-            if u < x { b = x; } else { a = x; }
-            v = w; fv = fw; w = x; fw = fx; x = u; fx = fu;
+            if u < x {
+                b = x;
+            } else {
+                a = x;
+            }
+            v = w;
+            fv = fw;
+            w = x;
+            fw = fx;
+            x = u;
+            fx = fu;
         } else {
-            if u < x { a = u; } else { b = u; }
+            if u < x {
+                a = u;
+            } else {
+                b = u;
+            }
             if fu <= fw || w == x {
-                v = w; fv = fw; w = u; fw = fu;
+                v = w;
+                fv = fw;
+                w = u;
+                fw = fu;
             } else if fu <= fv || v == x || v == w {
-                v = u; fv = fu;
+                v = u;
+                fv = fu;
             }
         }
         k += 1;
@@ -174,12 +209,22 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
     let tol = tolerance + f64::EPSILON.sqrt() * x.abs();
     let converged = (x - 0.5 * (a + b)).abs() <= 2.0 * tol - 0.5 * (b - a);
     for (point, value) in endpoints {
-        if value < fx { x = point; fx = value; }
+        if value < fx {
+            x = point;
+            fx = value;
+        }
     }
     a = a.min(x);
     b = b.max(x);
     Ok(ScalarSolution {
-        x, value: fx, bracket: (a, b), iterations: k,
-        status: if converged { crate::Status::Converged } else { crate::Status::MaxIterations },
+        x,
+        value: fx,
+        bracket: (a, b),
+        iterations: k,
+        status: if converged {
+            crate::Status::Converged
+        } else {
+            crate::Status::MaxIterations
+        },
     })
 }

@@ -13,15 +13,26 @@ impl Objective for Rosenbrock {
         ])
     }
     fn hessian(&self, x: &Vector) -> Option<Matrix> {
-        Some(Matrix::from_row_slice(2, 2, &[
-            1200.0 * x[0] * x[0] - 400.0 * x[1] + 2.0, -400.0 * x[0],
-            -400.0 * x[0], 200.0,
-        ]))
+        Some(Matrix::from_row_slice(
+            2,
+            2,
+            &[
+                1200.0 * x[0] * x[0] - 400.0 * x[1] + 2.0,
+                -400.0 * x[0],
+                -400.0 * x[0],
+                200.0,
+            ],
+        ))
     }
 }
 
-pub fn v(x: &[f64]) -> Vector { Vector::from_column_slice(x) }
+pub fn v(x: &[f64]) -> Vector {
+    Vector::from_column_slice(x)
+}
 
 pub fn close(actual: &Vector, expected: &[f64], tolerance: f64) {
-    assert!((actual - v(expected)).norm() < tolerance, "actual={actual:?}, expected={expected:?}");
+    assert!(
+        (actual - v(expected)).norm() < tolerance,
+        "actual={actual:?}, expected={expected:?}"
+    );
 }

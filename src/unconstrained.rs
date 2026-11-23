@@ -1,6 +1,6 @@
 use crate::{
-    Error, Matrix, Objective, Options, Solution, Vector, evaluate, hessian, initial,
-    line_search, solution, solve,
+    Error, Matrix, Objective, Options, Solution, Vector, evaluate, hessian, initial, line_search,
+    solution, solve,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -14,7 +14,9 @@ pub enum Method {
     Dfp,
     Sr1,
     /// Convex Broyden inverse-Hessian family: 0 is DFP, 1 is BFGS.
-    Broyden { phi: f64 },
+    Broyden {
+        phi: f64,
+    },
 }
 
 pub fn minimize<P: Objective + ?Sized>(
@@ -45,8 +47,11 @@ pub fn minimize<P: Objective + ?Sized>(
             Method::SteepestDescent => -&g,
             Method::NormalizedGradient => -&g / norm,
             Method::FletcherReeves => {
-                if k % (n + 1) == 0 { -&g }
-                else { -&g + g.norm_squared() / previous_g.norm_squared() * &previous_d }
+                if k % (n + 1) == 0 {
+                    -&g
+                } else {
+                    -&g + g.norm_squared() / previous_g.norm_squared() * &previous_d
+                }
             }
             Method::DampedNewton => solve(&hessian(problem, &x)?, &(-&g))?,
             Method::ModifiedNewton => {
@@ -84,7 +89,10 @@ pub fn minimize<P: Objective + ?Sized>(
 }
 
 pub(crate) fn update_inverse(
-    h: &mut Matrix<f64>, s: &Vector<f64>, y: &Vector<f64>, method: Method,
+    h: &mut Matrix<f64>,
+    s: &Vector<f64>,
+    y: &Vector<f64>,
+    method: Method,
 ) {
     let hy = &*h * y;
     if matches!(method, Method::Sr1) {
@@ -105,8 +113,7 @@ pub(crate) fn update_inverse(
     let yhy = y.dot(&hy);
     if sy > 1e-12 * s.norm() * y.norm() && yhy > 0.0 {
         let v = s / sy - &hy / yhy;
-        *h += s * s.transpose() / sy - &hy * hy.transpose() / yhy
-            + phi * yhy * &v * v.transpose();
+        *h += s * s.transpose() / sy - &hy * hy.transpose() / yhy + phi * yhy * &v * v.transpose();
         *h = 0.5 * (&*h + h.transpose());
     }
 }
