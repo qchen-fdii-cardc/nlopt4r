@@ -78,7 +78,13 @@ fn population(
     let capacity = size
         .checked_mul(bounds.dimension())
         .ok_or(Error::InvalidInput("population size overflow"))?;
-    let mut result = Vec::with_capacity(capacity);
+    if capacity > isize::MAX as usize / std::mem::size_of::<f64>() {
+        return Err(Error::InvalidInput("population byte-size overflow"));
+    }
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(capacity)
+        .map_err(|_| Error::InvalidInput("population allocation failed"))?;
     if let Some(points) = initial {
         if points.len() != size {
             return Err(Error::InvalidInput("initial population size"));

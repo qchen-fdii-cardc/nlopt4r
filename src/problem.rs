@@ -82,7 +82,7 @@ impl Bounds {
             (0..self.dimension()).map(|i| self.lower[i] + 0.5 * self.width(i)),
         )
     }
-    /// Map normalized coordinates in [0,1] to the domain.
+    /// Map normalized coordinates in `[0,1]` to the domain.
     pub fn from_unit(&self, unit: &[f64]) -> Result<Vector, Error> {
         crate::utils::validate_slice(unit, self.dimension(), "normalized coordinates")?;
         if unit.iter().any(|v| !(0.0..=1.0).contains(v)) {

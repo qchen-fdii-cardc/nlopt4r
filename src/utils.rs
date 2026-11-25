@@ -30,10 +30,11 @@ pub fn directional_difference<P: crate::Evaluator + ?Sized>(
 ) -> Result<f64, Error> {
     validate_slice(direction, x.len(), "difference direction")?;
     crate::positive(step, "difference step")?;
+    let denominator = crate::finite(2.0 * step, "difference denominator")?;
     let plus: Vec<_> = x.iter().zip(direction).map(|(x, d)| x + step * d).collect();
     let minus: Vec<_> = x.iter().zip(direction).map(|(x, d)| x - step * d).collect();
     crate::finite(
-        (context.evaluate(&plus)? - context.evaluate(&minus)?) / (2.0 * step),
+        (context.evaluate(&plus)? - context.evaluate(&minus)?) / denominator,
         "directional difference",
     )
 }

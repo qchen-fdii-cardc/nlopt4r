@@ -121,6 +121,16 @@ fn invalid_populations_and_callback_failures_are_explicit() {
         ..DeOptions::default()
     };
     assert!(differential_evolution(&p, &bounds, &invalid).is_err());
+    let before = calls.get();
+    let huge = DeOptions {
+        population_size: usize::MAX,
+        ..Default::default()
+    };
+    assert!(matches!(
+        differential_evolution(&p, &bounds, &huge),
+        Err(Error::InvalidInput(_))
+    ));
+    assert_eq!(calls.get(), before);
 }
 #[test]
 fn forced_crossover_changes_a_one_dimensional_target_when_cr_zero() {

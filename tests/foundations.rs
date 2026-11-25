@@ -89,3 +89,30 @@ fn target_observer_and_difference_accounting() {
         Some(SearchTermination::TargetReached)
     );
 }
+
+#[test]
+fn failed_observer_and_overflowed_difference_have_explicit_safe_recovery() {
+    let calls = Cell::new(0);
+    let p = nlopt4r::value_only(|x: &[f64]| {
+        calls.set(calls.get() + 1);
+        Ok::<_, EvaluationError>(x[0] * x[0])
+    });
+    let mut context = EvaluationContext::new(&p, 1, &BudgetOptions::default()).unwrap();
+    assert!(directional_difference(&mut context, &[0.0], &[0.0], f64::MAX).is_err());
+    assert_eq!(calls.get(), 0);
+    let mut observer = |_: &EvaluationEvent<'_>| Err(EvaluationError::from("observer unavailable"));
+    let mut context = EvaluationContext::new(&p, 1, &BudgetOptions::default())
+        .unwrap()
+        .with_observer(&mut observer);
+    let error = context.evaluate(&[2.0]).unwrap_err();
+    let error = context.failure(error);
+    assert_eq!(error.last_point().unwrap().value, 4.0);
+    assert!(matches!(
+        error.root_cause(),
+        Error::Evaluation {
+            operation: "observer",
+            ..
+        }
+    ));
+    assert_eq!(context.counts().objective, 1);
+}
