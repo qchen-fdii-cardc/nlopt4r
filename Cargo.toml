@@ -2,6 +2,7 @@
 name = "nlopt4r"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Dense nonlinear optimization algorithms in pure Rust"
 readme = "README.md"
 repository = "https://github.com/qchen-fdii-cardc/nlopt"

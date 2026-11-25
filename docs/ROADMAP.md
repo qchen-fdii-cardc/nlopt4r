@@ -314,6 +314,10 @@ Theory coverage:
   not imply zero residual.
 - QP/SQP KKT systems, multiplier signs, working sets and restoration limits.
 - PHR's projected inequality term and consistent multiplier/penalty updates.
+  With the canonical signs, describe
+  `Phi_rho = f - mu'h + rho*||h||^2/2 +
+  (||max(0,lambda-rho*g)||^2-||lambda||^2)/(2*rho)`,
+  then `mu <- mu-rho*h`, `lambda <- max(0,lambda-rho*g)`.
 - DE mutation/crossover/selection and PSO memory/velocity dynamics as above;
   finite-budget search success does not establish a global convergence theorem.
 
@@ -342,12 +346,15 @@ The current manifest retains the package name/version and pure-Rust runtime
 dependency, and now supplies repository, documentation, keywords and categories.
 Do not rename the repository remote or fabricate a license.
 
-**Release blockers:** no license declaration/file, unconfirmed redistribution
-rights for the MATLAB-derived work, and no tested declared minimum Rust version.
-The locked nalgebra 0.34.2 declares Rust 1.87, but nlopt4r uses let-chains (Rust
-1.88+) and may have other requirements. Dependency MSRV alone is not package
-MSRV. Test the intended minimum compiler before setting `rust-version`.
-Only a stable toolchain is currently installed.
+**Release blockers:** no license declaration/file and unconfirmed redistribution
+rights for the MATLAB-derived work. The maintainer must select the license and
+confirm those rights; local compilation cannot establish them.
+
+The manifest now declares Rust 1.88 after a successful locked library check with
+Rust 1.88.0. The locked nalgebra 0.34.2 declares Rust 1.87, while nlopt4r uses
+let-chains (Rust 1.88+). Dependency MSRV alone is not package MSRV.
+Rust 1.88.0 was installed for validation without changing the default toolchain.
+Keep minimum-compiler testing in CI and review dependency updates against it.
 
 Default library consumers build pure Rust; today's repository `cargo test`
 still builds the dev-only native NLopt wrapper with CMake/C. Move that comparison
@@ -358,6 +365,7 @@ Safe validation commands from the package directory:
 
 ```sh
 cargo test --locked
+cargo +1.88.0 test --locked
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
@@ -375,6 +383,25 @@ A successful dry-run verifies local packaging/builds, not license rights,
 registry name ownership/availability, token permissions or final server
 acceptance. A license warning means not release-ready even if Cargo exits zero.
 No release tag or actual upload should happen until these gates are satisfied.
+
+### Validation performed in this planning pass
+
+- `cargo publish --dry-run --locked --registry crates-io` succeeded, verified
+  the extracted library and explicitly aborted upload. The initial inventory
+  contained 26 files and no unrelated datasets/build output/credential files.
+- All 62 integration tests and one doctest passed against the extracted source,
+  including all nine native NLopt comparison tests.
+- Formatting, all-target Clippy with warnings denied, warning-free API
+  documentation and local Markdown link checks passed.
+- An independent application built and ran against the extracted package using
+  a borrowed buffered callback, public solver options and strict evaluation
+  budget, and verified its analytic optimum.
+- A locked, offline library check and all 63 tests passed on Rust 1.88.0;
+  this is compiler compatibility evidence, not a proof that arbitrary future
+  dependency versions will preserve the MSRV.
+
+Repeat the dry-run on the final committed source whenever metadata or package
+contents change. The missing-license warning is deliberately not suppressed.
 
 ## 9. References
 
