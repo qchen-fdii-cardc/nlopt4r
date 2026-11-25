@@ -135,3 +135,56 @@ numerical correctness or a newly invented coverage threshold.
 Exact COCO/BBOB/CEC/CUTEst integration, additional certified datasets, full
 L-BFGS-B, preconditioning and further adaptive strategies remain explicitly
 unchecked extension items in [the roadmap](ROADMAP.md).
+
+## Paired shift/rotation experiment
+
+Source: `360e609`, clean working tree. This follow-up uses the same machine and
+compiler as above, instance seed **42**, optimizer seeds **0..29**, dimension 2,
+budget **4000**, and `de,pso,external-pattern` across all six smoke problems.
+Four independent on/off combinations produce **2160 records** with zero solver
+errors; target misses remain failures in ERT. The external pattern example is
+deterministic: its 30 seed labels repeat the same midpoint start.
+
+Each cell is **target hits / 30; ERT in evaluations**, including failed-run costs:
+
+| Problem / algorithm | Both off | Shift only | Rotation only | Shift + rotation |
+|---|---|---|---|---|
+| Sphere / external pattern | 30/30; 1.00 | 30/30; 96.00 | 30/30; 1.00 | 30/30; 96.00 |
+| Sphere / DE | 30/30; 1420.67 | 30/30; 1350.47 | 30/30; 1420.67 | 30/30; 1350.47 |
+| Coupled QP / external pattern | 30/30; 1.00 | 30/30; 85.00 | 30/30; 1.00 | 30/30; 93.00 |
+| Rastrigin / external pattern | 30/30; 1.00 | 0/30; infinity | 30/30; 1.00 | 0/30; infinity |
+| Rastrigin / DE | 29/30; 3534.10 | 30/30; 3345.03 | 25/30; 4150.28 | 24/30; 4462.96 |
+| Rastrigin / PSO | 30/30; 2513.23 | 29/30; 2585.52 | 28/30; 2889.46 | 25/30; 3562.88 |
+
+This removes a real center-start advantage: the external example no longer gets
+an automatic one-call target hit on shifted sphere/coupled QP/Rastrigin.
+Orientation matters on Rastrigin, while sphere is rotation-invariant.
+Translation does **not** make every solver/problem harder: shifted sphere DE
+uses fewer calls here. One instance seed is illustrative, not statistical
+evidence across independent landscapes, and no controlled timing claim is made.
+
+All **360** untransformed DE/PSO outcomes exactly match the original retained
+baseline in objective counts, best values/points, first target-hit counts and
+termination. Across all four modes, every algorithm and optimizer seed receives
+the same transformation for a given problem. The shift vector is identical
+between shift-only and combined runs; the matrix is identical between
+rotation-only and combined runs.
+
+An additional **120 native comparison records** verify both native/Rust L-BFGS
+receive the exact same transformations as the main harness, with no solver errors
+and all objective counts within budget. The native experiment remains unbounded
+and uses its own shared native-runner initialization protocol; do not pool it
+with finite-box harness results.
+
+Complete replayable evidence:
+[paired JSONL](../tools/bench/results/affine-paired.jsonl.gz) and
+[native JSONL](../tools/bench/results/affine-native.jsonl.gz).
+Decompress the paired file and pass it to `--summarize`: its 72 summary groups
+keep all problems/algorithms/transformations separate. See
+[commands, formulas and domain caveats](BENCHMARKS.md#optional-recorded-shifts-and-rotations).
+
+Validation includes 20 benchmark tests on stable and Rust 1.88, 18 tests with
+default tooling features disabled, ten native correctness comparisons,
+gradient-chain-rule and counted-difference checks, proper orthogonal rotations
+through dimension 128, historical-schema reading, exact coefficient round trips
+and rejection of corrupt transformation metadata.

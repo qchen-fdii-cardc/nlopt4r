@@ -15,10 +15,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Transformation {
+    /// Affine generator/representation version, currently 1.
     pub version: u32,
     /// Independent of optimizer seeds and initial-point RNG state.
     pub seed: u64,
+    /// Whether the feasible reference was randomly translated.
     pub shift_enabled: bool,
+    /// Whether `rotation` supplies a proper orthogonal coordinate change.
     pub rotation_enabled: bool,
     /// Translation relative to the base problem's certified reference point.
     pub shift: Vec<f64>,
@@ -27,6 +30,12 @@ pub struct Transformation {
 }
 
 impl Transformation {
+    /// Generate one problem/dimension instance, independent of solver RNG state.
+    ///
+    /// Returns `None` for both switches disabled. Shifted optima are sampled
+    /// inside the central 60% of the original box; rotations are Gaussian-QR
+    /// orthogonal bases corrected to determinant +1. The dimension must match
+    /// the catalog entry. Version and exact coefficients are serializable.
     pub fn new(
         problem: &Problem,
         dimension: usize,
@@ -95,6 +104,8 @@ impl Transformation {
         Ok(Some(result))
     }
 
+    /// Feasible transformed reference `base_reference + shift`.
+    /// Use the same problem/dimension this validated transformation describes.
     pub fn reference_point(&self, problem: &Problem) -> Vec<f64> {
         problem
             .reference(self.shift.len())
@@ -105,6 +116,9 @@ impl Transformation {
             .collect()
     }
 
+    /// Map solver coordinates to base-formula coordinates without clamping.
+    /// Input must have the validated instance dimension. This may leave the
+    /// original nominal box; the outer box is a bound on solver coordinates only.
     pub fn to_base(&self, problem: &Problem, x: &[f64]) -> Vec<f64> {
         if !self.rotation_enabled {
             return x.iter().zip(&self.shift).map(|(x, s)| x - s).collect();
@@ -145,6 +159,9 @@ impl Transformation {
             .collect()
     }
 
+    /// Check version, dimensions, finite coefficients, reference feasibility and
+    /// orthogonality/determinant (tolerance 1e-10). Recorded matrices are
+    /// authoritative for replay; validation does not regenerate them from the seed.
     pub fn validate(&self, problem: &Problem, n: usize) -> Result<(), String> {
         if problem.dimension(n)? != n {
             return Err("instance dimension does not match the problem".into());
