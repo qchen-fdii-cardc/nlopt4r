@@ -47,7 +47,11 @@ fn minimize_impl<P: Evaluator + ?Sized>(
     }
     let n = x0.len();
     let mut x = x0.clone();
-    let mut inverse = Matrix::identity(n, n);
+    let mut inverse = matches!(
+        method,
+        Method::Bfgs | Method::Dfp | Method::Sr1 | Method::Broyden { .. }
+    )
+    .then(|| Matrix::identity(n, n));
     let mut previous_g = Vector::zeros(n);
     let mut previous_d = Vector::zeros(n);
     let (mut f, mut g) = run.evaluate(problem, &x)?;
@@ -90,12 +94,14 @@ fn minimize_impl<P: Evaluator + ?Sized>(
                     }
                 }
             }
-            _ => -&inverse * &g,
+            _ => -inverse.as_ref().expect("quasi-Newton workspace") * &g,
         };
         // FR and indefinite Newton/SR1 models need a descent safeguard.
         if g.dot(&d) >= -1e-12 * g.norm() * d.norm() {
             d = -&g;
-            inverse = Matrix::identity(n, n);
+            if let Some(inverse) = &mut inverse {
+                *inverse = Matrix::identity(n, n);
+            }
         }
         let step = line_search::backtrack(f, g.dot(&d), &options.line_search, |alpha| {
             run.value(problem, &(&x + alpha * &d))
@@ -104,7 +110,9 @@ fn minimize_impl<P: Evaluator + ?Sized>(
         let (new_f, new_g) = run.evaluate(problem, &next)?;
         let s = &next - &x;
         let y = &new_g - &g;
-        update_inverse(&mut inverse, &s, &y, method);
+        if let Some(inverse) = &mut inverse {
+            update_inverse(inverse, &s, &y, method);
+        }
         previous_g = g;
         previous_d = d;
         x = next;

@@ -13,6 +13,9 @@ The [foundation guide](docs/FOUNDATIONS.md) covers validated bounds, shared
 evaluation budgets, observers and the external algorithm extension example.
 Seeded [DE and PSO](docs/GLOBAL.md) provide bounded, derivative-free population
 search; run `cargo run --example global_search`.
+The [scalable local guide](docs/SCALABLE_LOCAL.md) describes strong-Wolfe
+L-BFGS, Newton-CG and matrix-free trust regions. Bounded pattern search and
+Nelder-Mead are available in `derivative_free` (also `local::derivative_free`).
 
 ## Use from another Rust application or library
 

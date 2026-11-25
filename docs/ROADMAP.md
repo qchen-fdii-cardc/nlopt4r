@@ -22,7 +22,14 @@ Do not attempt to duplicate every NLopt algorithm before a first release.
     observer/cancellation and error-recovery conformance tests.
   - [x] Typed reports, documented defaults, theory/references and runnable example.
   - [ ] Measured 30-seed benchmark report.
-- [ ] M3 scalable local algorithms and measured complexity.
+- [x] M3 scalable local algorithms:
+  - [x] Strong-Wolfe search, bounded-history L-BFGS, Newton-CG and Steihaug trust CG.
+  - [x] Negative-curvature/boundary, strict-budget and accepted-cache regressions.
+  - [x] Actual allocation thresholds at 512/2048 variables; no dense gradient/CG
+    or L-BFGS workspace, plus large matrix-free tests.
+  - [x] Equal-target smoke measurements and native L-BFGS agreement.
+  - [x] Local derivative-free pattern search and Nelder-Mead, fixed coordinates
+    and partial-simplex evaluation budgets.
 - [ ] M4 numerical robustness and bounded local optimization.
 - [ ] M5 broad problem catalog, standardized adapters, theory, CI and coverage.
 

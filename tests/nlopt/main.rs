@@ -185,6 +185,18 @@ fn borrowed_multidimensional_quadratics_agree_with_nlopt() {
 }
 
 #[test]
+fn limited_memory_bfgs_agrees_with_native_lbfgs() {
+    for start in [[-1.2, 1.0], [0.0, 0.0]] {
+        let x0 = v(&start);
+        let reference = reference(&Rosenbrock, &x0, Algorithm::Lbfgs);
+        let actual =
+            nlopt4r::local::lbfgs(&Rosenbrock, &x0, &nlopt4r::local::LbfgsOptions::default())
+                .unwrap();
+        compare(&Rosenbrock, &actual, &reference, 1e-5, 1e-10);
+    }
+}
+
+#[test]
 fn bounded_scalar_searches_agree_with_nlopt() {
     let p = (
         |x: &Vector| x[0] * x[0] - x[0].sin(),

@@ -1,4 +1,11 @@
 //! Newton trust regions with a spectral solution of the quadratic subproblem.
+//!
+//! Matrix-free alternatives are provided separately; the dense spectral solver
+//! and its hard-case behavior below are unchanged.
+pub use crate::local::{
+    SteihaugOptions, SteihaugStep, SteihaugTermination, TrustRegionCgOptions, steihaug,
+    trust_region_cg,
+};
 use crate::{
     Error, Evaluator, Matrix, Solution, StopOptions, TerminationReason, Vector, finite, initial,
     positive,
