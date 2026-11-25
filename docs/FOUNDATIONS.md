@@ -71,5 +71,5 @@ cargo test                         # pure-Rust solver tests
 cargo test -p nlopt4r-reference    # requires CMake/C, not a published dependency
 ```
 
-The reference target still uses [tests/nlopt](../tests/nlopt/main.rs).
+The reference target still uses [tests/nlopt](../tests/nlopt/comparison.rs).
 See [ROADMAP](ROADMAP.md) for later local/global methods and release gates.

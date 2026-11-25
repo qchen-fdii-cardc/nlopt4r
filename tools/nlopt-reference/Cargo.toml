@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[dev-dependencies]
+[dependencies]
 nlopt4r = { path = "../.." }
 nlopt = "0.8.1"
+nlopt4r-bench = { path = "../bench" }
+serde_json = "1"
 
 [[test]]
 name = "nlopt_comparison"
-path = "../../tests/nlopt/main.rs"
+path = "../../tests/nlopt/comparison.rs"

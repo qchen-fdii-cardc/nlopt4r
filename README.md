@@ -19,6 +19,9 @@ Nelder-Mead are available in `derivative_free` (also `local::derivative_free`).
 The [robustness guide](docs/ROBUSTNESS.md) covers adaptive QR least squares,
 projected gradients and explicit SQP restoration. [NIST verification](docs/NIST.md)
 checks QR LM against certified fitting data.
+The [theory and solver-selection guide](docs/THEORY.md) explains assumptions,
+complexity and references. The [benchmark guide](docs/BENCHMARKS.md) documents
+the verified problem catalog, repeatable runs and failure-inclusive summaries.
 
 ## Use from another Rust application or library
 
@@ -243,9 +246,10 @@ Multipliers start at zero. Reports include stationarity, feasibility,
 complementarity (`||min(g, lambda)||`) and, for PHR, inner iteration counts.
 Convergence requires all three conditions, not just a small step.
 
-SQP requires feasible linearized constraint subproblems; it does not implement
-elastic restoration when those subproblems are infeasible. PHR may be a better
-choice for infeasible nonlinear starts. Newton-Lagrange methods find KKT points;
+Legacy SQP requires feasible linearized constraint subproblems. Use
+`constrained::sqp_with_restoration` for explicit local feasibility restoration,
+or PHR for penalty-based handling of infeasible nonlinear starts.
+Newton-Lagrange methods find KKT points;
 they do not certify second-order optimality.
 
 ## Errors and termination
@@ -285,10 +289,11 @@ Scalar error checkpoints also expose the last valid scalar point through
 `last_solution()` as a length-one vector; their `gradient_norm` is NaN because
 scalar search does not evaluate a gradient.
 
-These dense, local algorithms are intended for small/moderate, reasonably scaled
-problems. They do not promise global nonlinear minima, sparse performance,
-automatic differentiation, bounds handling beyond explicit constraints, or
-production-grade infeasibility/unboundedness certificates.
+Legacy dense methods are intended for small/moderate, reasonably scaled problems;
+matrix-free and limited-memory alternatives support larger dimensions.
+Dedicated bounded/global methods handle finite boxes. No method promises
+certified global nonlinear minima, automatic differentiation or production-grade
+infeasibility/unboundedness certificates.
 
 ## Validation
 
@@ -317,7 +322,7 @@ cargo test -p nlopt4r-reference
 cargo test --release -p nlopt4r-reference
 ```
 
-The wrapper is a dev-dependency of the **unpublished reference tooling crate**,
+The wrapper is a dependency of the **unpublished reference tooling crate**,
 not of the solver package. Default `cargo test` and downstream builds are
 pure Rust. Only the explicit reference command (or `cargo test --workspace`)
 requires **CMake and a C compiler** to build bundled native NLopt; a separate

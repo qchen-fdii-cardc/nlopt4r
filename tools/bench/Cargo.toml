@@ -1,0 +1,18 @@
+[package]
+name = "nlopt4r-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[features]
+default = ["extended", "external-pattern"]
+extended = []
+external-pattern = ["dep:nlopt4r-extension-example"]
+
+[dependencies]
+nlopt4r = { path = "../.." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nlopt4r-extension-example = { path = "../extension", optional = true }
+

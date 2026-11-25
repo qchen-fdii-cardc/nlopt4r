@@ -1,0 +1,57 @@
+name: Rust validation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 2
+  RAYON_NUM_THREADS: 2
+
+jobs:
+  pure-rust:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [stable, "1.88.0"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "${{ matrix.toolchain }}" --profile minimal
+      - run: cargo +${{ matrix.toolchain }} test --locked
+      - if: matrix.toolchain == 'stable'
+        run: |
+          rustup component add rustfmt clippy --toolchain stable
+          cargo +stable fmt --all --check
+          cargo +stable clippy -p nlopt4r -p nlopt4r-bench -p nlopt4r-extension-example --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo +stable doc -p nlopt4r -p nlopt4r-bench -p nlopt4r-extension-example --no-deps
+          cargo +stable test -p nlopt4r-bench
+          cargo +stable run -p nlopt4r-extension-example
+          cargo +stable bench --bench kernels -- --test
+
+  native-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cmake --version && cc --version
+      - run: cargo test --locked -p nlopt4r-reference
+
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --suite smoke --algorithms lbfgs,de,pso \
+            --seeds 0..2 --dimension 2 --budget-per-dimension 2000 \
+            --output target/smoke.jsonl
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --summarize target/smoke.jsonl

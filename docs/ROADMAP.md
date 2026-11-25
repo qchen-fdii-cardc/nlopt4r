@@ -50,7 +50,7 @@ recoverable checkpoints are already implemented. There are 62 integration tests
 (including nine native-reference tests) and one doctest.
 
 Evidence: [public API](../src/lib.rs), [local solvers](../src/unconstrained.rs),
-[accounting](../src/stopping.rs), [reference comparisons](../tests/nlopt/main.rs)
+[accounting](../src/stopping.rs), [reference comparisons](../tests/nlopt/comparison.rs)
 and [interface tests](../tests/interfaces.rs).
 
 | Capability | Upstream NLopt | nlopt4r today / recommended direction |

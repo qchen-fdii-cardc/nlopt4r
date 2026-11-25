@@ -16,6 +16,13 @@ rand = { version = "0.9", default-features = false, features = ["std"] }
 rand_chacha = "0.9"
 
 [workspace]
-members = ["tools/nlopt-reference", "tools/extension"]
+members = ["tools/nlopt-reference", "tools/extension", "tools/bench"]
 default-members = ["."]
 resolver = "3"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "kernels"
+harness = false
