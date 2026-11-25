@@ -188,3 +188,64 @@ default tooling features disabled, ten native correctness comparisons,
 gradient-chain-rule and counted-difference checks, proper orthogonal rotations
 through dimension 128, historical-schema reading, exact coefficient round trips
 and rejection of corrupt transformation metadata.
+
+## Paired observation-noise experiment
+
+Source: `7fa4b1d`, clean working tree. The main harness ran DE and PSO on the
+six smoke problems, dimension 2, optimizer seeds **0..29**, budget **4000**,
+shift + rotation enabled with instance seed **42**, and noise seed **17**.
+Seven configurations (noise off; Gaussian, uniform and Laplace at standard
+deviations **1e-6** and **0.01**) produced **2520 records**, **84 summary groups**,
+and **zero solver errors**. Misses remain failures; zero errors is not zero misses.
+
+Each cell below is **noise-free target visits / successful returned recommendations**,
+out of 30 runs. A dash means post-run recommendation scoring is disabled for
+noiseless runs, not zero successes.
+
+| Distribution | Standard deviation | Sphere / PSO | Rastrigin / DE |
+|---|---:|---:|---:|
+| None | 0 | 30 / - | 24 / - |
+| Gaussian | 1e-6 | 30 / 30 | 24 / 22 |
+| Uniform | 1e-6 | 30 / 30 | 23 / 21 |
+| Laplace | 1e-6 | 30 / 29 | 24 / 23 |
+| Gaussian | 0.01 | 17 / 0 | 7 / 0 |
+| Uniform | 0.01 | 29 / 1 | 5 / 0 |
+| Laplace | 0.01 | 14 / 0 | 5 / 0 |
+
+The distinction matters: under Gaussian sigma 0.01, sphere PSO visits the target
+in 17/30 runs but returns a target-quality point in **none**. A favorable noisy
+incumbent is not necessarily a good solution. Across all six problems and both
+algorithms at sigma 0.01, Gaussian yields 118 visited hits and 0 recommendation
+hits out of 360; uniform yields 208 and 5; Laplace yields 80 and 0.
+These are observations on one transformed instance seed, not universal rankings
+of noise models or claims of noise-robust optimization.
+
+Failure-inclusive visitation ERT for sphere PSO is 1361.03 evaluations without
+noise, 5280.29 with Gaussian sigma 0.01, 2130.76 with uniform sigma 0.01, and
+7109.79 with Laplace sigma 0.01. ERT can exceed the per-run budget because failed
+runs contribute cost. Noisy runs disable objective-target stopping and use the
+full 4000-call budget here; noiseless runs keep their original stopping policy.
+First-hit costs remain comparable as visitation metrics, not certification that
+the noisy solver selected the optimum. No wall-time speedup is claimed.
+
+All **360 noiseless outcomes** exactly reproduce the previous shifted/rotated
+baseline: objective/gradient counts, best points/values, first-hit counts,
+termination, transformation coefficients, and complete evaluation/value histories.
+For every noisy run, draw count equals objective count, objective count stays
+within budget, and the single post-run truth score is separately counted.
+Transform coefficients remain identical across every noise model/level.
+Summary successes, recommendation successes and ERT were independently recomputed;
+transformed sphere recommendation scores were independently checked as well.
+
+Replayable evidence: [paired noise JSONL](../tools/bench/results/noise-paired.jsonl.gz).
+Decompress and use `--summarize`; historical schema-1/2 records remain supported.
+See [noise options, sampling definitions and gradient caveats](BENCHMARKS.md#optional-reproducible-evaluation-noise).
+The native comparison runner remains noiseless.
+
+Validation: full workspace regression suite (including native comparisons and
+solver doctests), **28 benchmark tests** on stable and Rust 1.88, **25** with
+default features disabled, warning-free Clippy for both feature configurations,
+and warning-free benchmark rustdoc. Focused tests cover seeded distribution
+moments/scaling, repeated evaluations, strict noisy-probe budgets, exact
+mean-gradient semantics, false-target prevention, actual recommendation quality,
+overflow/error records, serialization, corrupt metadata and separated summaries.
