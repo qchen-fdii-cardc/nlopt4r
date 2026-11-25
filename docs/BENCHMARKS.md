@@ -180,7 +180,8 @@ not claims that an algorithm will find the reference.
 
 ## Baseline status
 
-Measured results are recorded separately; the harness is not itself evidence of
+Measured results are recorded in [BENCHMARK_RESULTS](BENCHMARK_RESULTS.md);
+the harness is not itself evidence of
 a speedup. Constrained solver comparisons, statistical confidence intervals and
 controlled hardware repeat measurements remain follow-up work.
 

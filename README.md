@@ -1,7 +1,7 @@
 # nlopt4r
 
 A reusable, pure-Rust library implementing the optimization families.
-This is a dense solver library, **not** a binding to the unrelated upstream NLopt C library.
+This is a solver library, **not** a binding to the unrelated upstream NLopt C library.
 
 See the [improvement roadmap](docs/ROADMAP.md) for the proposed architecture,
 PSO/DE algorithms, benchmark suites, theory documentation and publication checklist.
@@ -22,6 +22,8 @@ checks QR LM against certified fitting data.
 The [theory and solver-selection guide](docs/THEORY.md) explains assumptions,
 complexity and references. The [benchmark guide](docs/BENCHMARKS.md) documents
 the verified problem catalog, repeatable runs and failure-inclusive summaries.
+See the [measured baseline](docs/BENCHMARK_RESULTS.md) for 30-seed results,
+native comparisons, coverage and known limitations.
 
 ## Use from another Rust application or library
 

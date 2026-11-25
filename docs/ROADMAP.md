@@ -9,19 +9,19 @@ Do not attempt to duplicate every NLopt algorithm before a first release.
 
 - [ ] M0 release gate: metadata/MSRV/dry-run/consumer checks passed; **blocked**
   on maintainer-approved license and source redistribution confirmation.
-- [ ] M1 foundation and baseline:
+- [x] M1 foundation and baseline:
   - [x] Finite/fixed bounds, scaling, projection and seeded sampling.
   - [x] Public checked evaluation context, strict budgets, target/cancellation,
     fallible observers and value-only recovery.
   - [x] External bounded pattern-search application using public utilities.
-  - [x] Native comparisons isolated in unpublished tooling; nine tests preserved.
-  - [ ] Compatibility local namespace, benchmark smoke runner and baseline.
-- [ ] M2 global methods:
+  - [x] Native comparisons isolated in unpublished tooling; ten tests pass.
+  - [x] Compatibility local namespace, benchmark smoke runner and baseline.
+- [x] M2 global methods:
   - [x] Synchronous DE/rand/1/bin and inertia-weight global-best PSO.
   - [x] Budget, bounds/fixed-coordinate, seed, crossover/donor, synchronous PSO,
     observer/cancellation and error-recovery conformance tests.
   - [x] Typed reports, documented defaults, theory/references and runnable example.
-  - [ ] Measured 30-seed benchmark report.
+  - [x] Measured 30-seed smoke/global benchmark report, including missed targets.
 - [x] M3 scalable local algorithms:
   - [x] Strong-Wolfe search, bounded-history L-BFGS, Newton-CG and Steihaug trust CG.
   - [x] Negative-curvature/boundary, strict-budget and accepted-cache regressions.
@@ -36,17 +36,37 @@ Do not attempt to duplicate every NLopt algorithm before a first release.
   - [x] Explicit SQP restoration and full constrained error checkpoints.
   - [x] Rectangular/rank-deficient/scaled, budget/failure and certified NIST
     Misra1a regressions; legacy solver behavior retained.
-- [ ] M5 broad problem catalog, standardized adapters, theory, CI and coverage.
+- [x] M5 initial catalog, benchmark protocol, theory, CI and coverage:
+  - [x] 35 independently verified objectives and counted derivative adapters.
+  - [x] JSONL/CSV, histories, failure-inclusive ERT and external algorithm registry.
+  - [x] Manufactured KKT properties and certified NIST Misra1a verification.
+  - [x] Theory/selection guides, stable/MSRV/native/smoke/coverage CI.
+  - [x] Measured coverage, standalone package/consumer and publication dry-run.
+
+[Measured results and validation](BENCHMARK_RESULTS.md) record the exact source,
+1500 experiment records and known limitations. M1-M5 above cover the implemented
+first-release phase, not every longer-term item in the original design below.
+
+### Open extension work (not completed)
+
+- [ ] Exact COCO/BBOB, CEC/CUTEst adapters and broader certified NIST datasets.
+- [ ] Shifted/rotated/noisy catalog instances and scheduled high-dimensional
+  multi-target experiments with statistical confidence intervals.
+- [ ] Preconditioning, full L-BFGS-B, adaptive global strategies and polishing.
+- [ ] Further constrained scaling/filter work and reusable QP factorization updates.
+- [ ] P3 algorithms and sparse/AD/GPU/mixed-integer/multiobjective projects.
+
+These are future extensions, not claims made by the initial catalog or solvers.
 
 Unchecked milestones are not complete; optional future algorithms and external
 licensed datasets are not implicitly completed by another solver.
 
-## 1. Assessment against NLopt
+## 1. Initial assessment against NLopt
 
-The current package has dense gradient/quasi-Newton/Newton methods, scalar
+Before this implementation pass, the package had dense gradient/quasi-Newton/Newton methods, scalar
 searches, spectral trust regions, least squares, QP, SQP and augmented Lagrangian
 methods. Shared stopping criteria, strict objective budgets, callback errors and
-recoverable checkpoints are already implemented. There are 62 integration tests
+recoverable checkpoints were already implemented. There were 62 integration tests
 (including nine native-reference tests) and one doctest.
 
 Evidence: [public API](../src/lib.rs), [local solvers](../src/unconstrained.rs),
@@ -297,13 +317,14 @@ with 30 seeds offline rather than flaky random "always converges" tests.
 
 ### Benchmark commands to implement
 
-Proposed interface, not runnable commands today:
+Implemented interfaces; use fresh output paths and see the benchmark guide for
+exact protocols:
 
 ```sh
 cargo bench --bench kernels
 cargo run --release -p nlopt4r-bench -- --suite smoke --algorithms bfgs,lbfgs,de,pso
-cargo run --release -p nlopt4r-bench -- --suite global --seeds 0..30 --budget-per-dimension 10000 --output results.jsonl
-cargo run --release -p nlopt4r-reference -- --suite smooth --algorithms nlopt-lbfgs,nlopt4r-lbfgs
+cargo run --release -p nlopt4r-bench -- --suite global --algorithms de,pso --seeds 0..30 --budget-per-dimension 10000 --output results.jsonl
+cargo run --release -p nlopt4r-reference -- --suite smooth --algorithms nlopt-lbfgs,nlopt4r-lbfgs --output native.jsonl
 ```
 
 Use Criterion for kernels and a separate repeated-run harness for solver
@@ -394,7 +415,7 @@ Keep minimum-compiler testing in CI and review dependency updates against it.
 
 Default library consumers and default repository tests now build pure Rust.
 Native NLopt is isolated in `tools/nlopt-reference`; invoke
-`cargo test -p nlopt4r-reference` for the preserved nine comparisons.
+`cargo test -p nlopt4r-reference` for the ten comparisons.
 Keep an explicit native-reference CI job.
 
 Safe validation commands from the package directory:
@@ -412,7 +433,7 @@ cargo publish --dry-run --locked --registry crates-io
 Inspect the archive for source/examples/tests, unintended datasets and secrets;
 check compressed size. Compile/test the extracted package, and compile a small
 external path-dependent application against that extracted source to catch
-repository-only assumptions. Native references must remain dev-only.
+repository-only assumptions. Native references must remain in unpublished tooling.
 Do not read credential files, run login again or issue a real publish command.
 
 A successful dry-run verifies local packaging/builds, not license rights,
