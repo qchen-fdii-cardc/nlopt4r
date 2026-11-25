@@ -32,10 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("iteration budget exhausted".into());
     }
     println!(
-        "x = {}, f = {:.12e}, iterations = {}",
+        "x = {}, f = {:.12e}, iterations = {}, evaluations = {}, stop = {:?}",
         result.x.transpose(),
         result.value,
-        result.iterations
+        result.iterations,
+        result.evaluations.objective,
+        result.termination_reason
     );
     Ok(())
 }

@@ -4,7 +4,7 @@ mod common;
 use common::{Ellipse, Rosenbrock, close, v};
 use nlopt::{Algorithm, Nlopt, ObjFn, SuccessState, Target};
 use nlopt4r::{
-    Matrix, Method, Objective, Options, Solution, Vector,
+    Matrix, Method, Objective, Options, Solution, StopOptions, Vector,
     constrained::{self, ConstrainedOptions, ConstrainedProblem, Constraints},
     least_squares::{LeastSquares, levenberg_marquardt},
     line_search::{ScalarMethod, minimize_scalar},
@@ -49,7 +49,7 @@ fn reference<P: Objective>(p: &P, x0: &Vector, algorithm: Algorithm) -> (Vector,
     finish(&mut opt, x0)
 }
 
-fn reference_constrained<P: ConstrainedProblem>(p: &P, x0: &Vector) -> (Vector, f64) {
+fn reference_constrained<P: ConstrainedProblem + Objective>(p: &P, x0: &Vector) -> (Vector, f64) {
     let mut opt = Nlopt::new(
         Algorithm::Slsqp,
         x0.len(),
@@ -128,8 +128,11 @@ fn compare<P: Objective>(
 #[test]
 fn all_unconstrained_methods_agree_with_nlopt_on_rosenbrock() {
     let options = Options {
-        max_iterations: 100_000,
-        gradient_tolerance: 1e-5,
+        stopping: StopOptions {
+            max_iterations: 100_000,
+            gradient_tolerance: 1e-5,
+            ..StopOptions::default()
+        },
         ..Options::default()
     };
     for start in [&[-1.2, 1.0][..], &[0.0, 0.0]] {
@@ -153,7 +156,7 @@ fn all_unconstrained_methods_agree_with_nlopt_on_rosenbrock() {
             let r = minimize(&Rosenbrock, &x0, method, &options)
                 .unwrap_or_else(|e| panic!("{method:?}, start={start:?}: {e}"));
             assert!(
-                r.gradient_norm <= options.gradient_tolerance,
+                r.gradient_norm <= options.stopping.gradient_tolerance,
                 "{method:?}: {r:?}"
             );
             compare(&Rosenbrock, &r, &reference, 1e-4, 1e-9);
@@ -355,7 +358,7 @@ fn equality_and_active_set_qp_agree_with_nlopt_slsqp() {
         let x0 = Vector::zeros(qp.linear.len());
         let p = LinearConstraints(qp);
         let reference = reference_constrained(&p, &x0);
-        let r = quadratic::minimize(qp, &x0, &Options::default()).unwrap();
+        let r = quadratic::minimize(qp, &x0, &StopOptions::default()).unwrap();
         assert!(r.solution.gradient_norm < 1e-6);
         assert!(r.constraint_violation < 1e-6);
         assert!(
@@ -403,7 +406,7 @@ fn nonlinear_sqp_and_phr_agree_with_nlopt_slsqp() {
             constrained::minimize(&Ellipse, &x0, constrained::Method::Sqp, &options).unwrap(),
             constrained::augmented_lagrangian(&Ellipse, &x0, &options).unwrap(),
         ] {
-            assert!(r.solution.gradient_norm <= options.solver.gradient_tolerance);
+            assert!(r.solution.gradient_norm <= options.solver.stopping.gradient_tolerance);
             assert!(r.constraint_violation <= options.feasibility_tolerance);
             assert!(r.complementarity <= options.feasibility_tolerance);
             assert!(

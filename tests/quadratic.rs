@@ -1,6 +1,6 @@
 mod common;
 use common::{close, v};
-use nlopt4r::{Error, Matrix, Options, Status, Vector, quadratic::*};
+use nlopt4r::{Error, Matrix, Status, StopOptions, Vector, quadratic::*};
 
 fn check_kkt(qp: &QuadraticProgram, r: &QuadraticSolution) {
     assert!(r.solution.converged(), "{r:?}");
@@ -26,7 +26,7 @@ fn matlab_active_set_example_from_feasible_and_infeasible_starts() {
     qp.inequalities = Matrix::from_row_slice(3, 2, &[-3.0, -2.0, 1.0, 0.0, 0.0, 1.0]);
     qp.inequality_rhs = v(&[-6.0, 0.0, 0.0]);
     for start in [&[0.0, 0.0][..], &[5.0, -3.0], &[1.0, 1.0]] {
-        let r = minimize(&qp, &v(start), &Options::default()).unwrap();
+        let r = minimize(&qp, &v(start), &StopOptions::default()).unwrap();
         check_kkt(&qp, &r);
         close(&r.solution.x, &[0.5, 2.25], 1e-6);
         close(&r.inequality_multipliers, &[0.75, 0.0, 0.0], 1e-6);
@@ -51,7 +51,7 @@ fn active_set_removes_wrong_constraints_and_handles_mixed_constraints() {
     qp.inequalities = Matrix::identity(3, 3);
     qp.inequality_rhs = Vector::zeros(3);
     for start in [&[3.0, 0.0, 0.0][..], &[0.0, 0.0, 0.0], &[-5.0, -2.0, -3.0]] {
-        let r = minimize(&qp, &v(start), &Options::default()).unwrap();
+        let r = minimize(&qp, &v(start), &StopOptions::default()).unwrap();
         check_kkt(&qp, &r);
         close(&r.solution.x, &[0.0, 1.0, 2.0], 1e-6);
     }
@@ -65,7 +65,7 @@ fn redundant_constraints_and_positive_semidefinite_hessians() {
     qp.equality_rhs = v(&[2.0, 4.0]);
     qp.inequalities = Matrix::from_row_slice(3, 2, &[1.0, 0.0, 2.0, 0.0, 1.0, 0.0]);
     qp.inequality_rhs = v(&[0.0, 0.0, 0.0]);
-    let r = minimize(&qp, &v(&[0.0, 2.0]), &Options::default()).unwrap();
+    let r = minimize(&qp, &v(&[0.0, 2.0]), &StopOptions::default()).unwrap();
     check_kkt(&qp, &r);
     close(&r.solution.x, &[1.0, 2.0], 1e-6);
 }
@@ -76,25 +76,29 @@ fn infeasible_equalities_and_inequalities_are_reported() {
     qp.equalities = Matrix::from_element(2, 1, 1.0);
     qp.equality_rhs = v(&[1.0, 2.0]);
     assert_eq!(
-        minimize(&qp, &v(&[0.0]), &Options::default()).unwrap_err(),
-        Error::Infeasible
+        minimize(&qp, &v(&[0.0]), &StopOptions::default())
+            .unwrap_err()
+            .root_cause(),
+        &Error::Infeasible
     );
     qp.equalities = Matrix::zeros(0, 1);
     qp.equality_rhs = Vector::zeros(0);
     qp.inequalities = Matrix::from_column_slice(2, 1, &[1.0, -1.0]);
     qp.inequality_rhs = v(&[2.0, -1.0]);
     assert_eq!(
-        minimize(&qp, &v(&[0.0]), &Options::default()).unwrap_err(),
-        Error::Infeasible
+        minimize(&qp, &v(&[0.0]), &StopOptions::default())
+            .unwrap_err()
+            .root_cause(),
+        &Error::Infeasible
     );
 }
 
 #[test]
 fn invalid_qp_and_budget_are_not_success() {
     let mut qp = QuadraticProgram::unconstrained(Matrix::identity(1, 1), v(&[-2.0]));
-    let options = Options {
+    let options = StopOptions {
         max_iterations: 0,
-        ..Options::default()
+        ..StopOptions::default()
     };
     assert_eq!(
         minimize(&qp, &v(&[0.0]), &options).unwrap().solution.status,
@@ -113,7 +117,7 @@ fn invalid_qp_and_budget_are_not_success() {
     qp.hessian = Matrix::identity(2, 2);
     assert!(matches!(
         minimize(&qp, &v(&[0.0]), &options),
-        Err(Error::DimensionMismatch(_))
+        Err(Error::DimensionMismatch { .. })
     ));
 }
 
@@ -140,7 +144,7 @@ fn singular_flat_and_unbounded_systems_have_explicit_contracts() {
 #[test]
 fn small_step_with_large_gradient_is_not_false_convergence() {
     let qp = QuadraticProgram::unconstrained(Matrix::from_element(1, 1, 1e8), v(&[-1.0]));
-    let r = minimize(&qp, &v(&[0.0]), &Options::default()).unwrap();
+    let r = minimize(&qp, &v(&[0.0]), &StopOptions::default()).unwrap();
     check_kkt(&qp, &r);
     assert!((r.solution.x[0] - 1e-8).abs() < 1e-15, "{r:?}");
 }

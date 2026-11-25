@@ -1,6 +1,6 @@
 mod common;
 use common::{Rosenbrock, close, v};
-use nlopt4r::{Error, Matrix, Method, Objective, Options, Status, Vector, minimize};
+use nlopt4r::{Error, Matrix, Method, Objective, Options, Status, StopOptions, Vector, minimize};
 
 fn methods() -> [Method; 11] {
     [
@@ -21,8 +21,11 @@ fn methods() -> [Method; 11] {
 #[test]
 fn all_methods_solve_matlab_rosenbrock_from_standard_start() {
     let options = Options {
-        max_iterations: 100_000,
-        gradient_tolerance: 1e-5,
+        stopping: StopOptions {
+            max_iterations: 100_000,
+            gradient_tolerance: 1e-5,
+            ..StopOptions::default()
+        },
         ..Options::default()
     };
     for method in methods() {
@@ -30,7 +33,7 @@ fn all_methods_solve_matlab_rosenbrock_from_standard_start() {
             .unwrap_or_else(|e| panic!("{method:?}: {e}"));
         assert!(r.converged(), "{method:?}: {r:?}");
         assert!(
-            r.gradient_norm <= options.gradient_tolerance,
+            r.gradient_norm <= options.stopping.gradient_tolerance,
             "{method:?}: {r:?}"
         );
         assert!(r.value < 1e-9, "{method:?}: {r:?}");
@@ -42,7 +45,10 @@ fn all_methods_solve_matlab_rosenbrock_from_standard_start() {
 fn all_methods_accept_initial_optimum_and_zero_budget() {
     for method in methods() {
         let options = Options {
-            max_iterations: 0,
+            stopping: StopOptions {
+                max_iterations: 0,
+                ..StopOptions::default()
+            },
             ..Options::default()
         };
         let r = minimize(&Rosenbrock, &v(&[1.0, 1.0]), method, &options).unwrap();
@@ -111,23 +117,31 @@ fn malformed_callbacks_and_options_return_errors() {
         |_: &Vector| Vector::from_element(2, 1.0),
     );
     assert_eq!(
-        minimize(&missing, &x, Method::DampedNewton, &options).unwrap_err(),
-        Error::MissingHessian
+        minimize(&missing, &x, Method::DampedNewton, &options)
+            .unwrap_err()
+            .root_cause(),
+        &Error::MissingHessian
     );
     let bad_g = (|_: &Vector| 1.0, |_: &Vector| v(&[1.0]));
     assert!(matches!(
-        minimize(&bad_g, &x, Method::Bfgs, &options),
-        Err(Error::DimensionMismatch(_))
+        minimize(&bad_g, &x, Method::Bfgs, &options)
+            .unwrap_err()
+            .root_cause(),
+        Error::DimensionMismatch { .. }
     ));
     let nan = (|_: &Vector| f64::NAN, |_: &Vector| Vector::zeros(2));
     assert!(matches!(
-        minimize(&nan, &x, Method::Bfgs, &options),
-        Err(Error::NonFinite(_))
+        minimize(&nan, &x, Method::Bfgs, &options)
+            .unwrap_err()
+            .root_cause(),
+        Error::NonFinite(_)
     ));
     let nan_g = (|_: &Vector| 1.0, |_: &Vector| v(&[f64::INFINITY, 0.0]));
     assert!(matches!(
-        minimize(&nan_g, &x, Method::Bfgs, &options),
-        Err(Error::NonFinite(_))
+        minimize(&nan_g, &x, Method::Bfgs, &options)
+            .unwrap_err()
+            .root_cause(),
+        Error::NonFinite(_)
     ));
     let bad_h = (
         |x: &Vector| x.sum(),
@@ -135,8 +149,10 @@ fn malformed_callbacks_and_options_return_errors() {
         |_: &Vector| Matrix::zeros(1, 1),
     );
     assert!(matches!(
-        minimize(&bad_h, &x, Method::DampedNewton, &options),
-        Err(Error::DimensionMismatch(_))
+        minimize(&bad_h, &x, Method::DampedNewton, &options)
+            .unwrap_err()
+            .root_cause(),
+        Error::DimensionMismatch { .. }
     ));
     assert!(minimize(&Rosenbrock, &Vector::zeros(0), Method::Bfgs, &options).is_err());
     assert!(minimize(&Rosenbrock, &v(&[f64::NAN, 1.0]), Method::Bfgs, &options).is_err());
@@ -144,7 +160,10 @@ fn malformed_callbacks_and_options_return_errors() {
         assert!(minimize(&Rosenbrock, &x, Method::Broyden { phi }, &options).is_err());
     }
     let bad = Options {
-        gradient_tolerance: -1.0,
+        stopping: StopOptions {
+            gradient_tolerance: -1.0,
+            ..StopOptions::default()
+        },
         ..options
     };
     assert!(minimize(&Rosenbrock, &x, Method::Bfgs, &bad).is_err());
@@ -154,7 +173,10 @@ fn malformed_callbacks_and_options_return_errors() {
 fn final_iteration_checks_convergence_instead_of_reporting_exhaustion() {
     let p = (|x: &Vector| 0.5 * x.norm_squared(), |x: &Vector| x.clone());
     let options = Options {
-        max_iterations: 1,
+        stopping: StopOptions {
+            max_iterations: 1,
+            ..StopOptions::default()
+        },
         ..Options::default()
     };
     let r = minimize(&p, &v(&[2.0]), Method::Bfgs, &options).unwrap();

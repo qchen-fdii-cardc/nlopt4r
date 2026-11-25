@@ -26,10 +26,10 @@ fn armijo_rejects_non_descent_and_exhaustion() {
         max_iterations: 1,
         ..ArmijoOptions::default()
     };
-    assert_eq!(
+    assert!(matches!(
         armijo(&p, &v(&[1.0]), &v(&[-20.0]), &options).unwrap_err(),
-        Error::LineSearchFailed
-    );
+        Error::LineSearchFailed { evaluations: 1, .. }
+    ));
 }
 
 #[test]

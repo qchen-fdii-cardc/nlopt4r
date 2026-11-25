@@ -1,6 +1,8 @@
 mod common;
 use common::{Rosenbrock, close, v};
-use nlopt4r::{Error, Matrix, Options, Status, Vector, least_squares::*, trust_region::*};
+use nlopt4r::{
+    Error, Matrix, Options, Status, StopOptions, Vector, least_squares::*, trust_region::*,
+};
 
 fn assert_trust_kkt(g: &Vector, b: &Matrix, radius: f64) {
     let r = subproblem(g, b, radius).unwrap();
@@ -43,9 +45,9 @@ fn trust_region_solves_rosenbrock_and_reports_limits() {
         assert!(r.value < 1e-12);
     }
     let options = TrustRegionOptions {
-        solver: Options {
+        stopping: StopOptions {
             max_iterations: 0,
-            ..Options::default()
+            ..StopOptions::default()
         },
         ..options
     };
@@ -67,8 +69,10 @@ fn trust_region_validates_hessians_radii_and_missing_derivatives() {
     );
     let p = (|x: &Vector| x.norm_squared(), |x: &Vector| 2.0 * x);
     assert_eq!(
-        minimize(&p, &v(&[1.0]), &TrustRegionOptions::default()).unwrap_err(),
-        Error::MissingHessian
+        minimize(&p, &v(&[1.0]), &TrustRegionOptions::default())
+            .unwrap_err()
+            .root_cause(),
+        &Error::MissingHessian
     );
 }
 
@@ -131,7 +135,7 @@ fn lm_rejects_invalid_callbacks_and_handles_initial_root() {
     let p = (|_: &Vector| v(&[1.0]), |_: &Vector| Matrix::zeros(2, 1));
     assert!(matches!(
         levenberg_marquardt(&p, &v(&[0.0]), &Options::default()),
-        Err(Error::DimensionMismatch(_))
+        Err(Error::DimensionMismatch { .. })
     ));
     let p = (|x: &Vector| x.clone(), |_: &Vector| Matrix::identity(1, 1));
     let r = levenberg_marquardt(&p, &v(&[0.0]), &Options::default()).unwrap();

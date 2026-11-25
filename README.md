@@ -1,8 +1,7 @@
 # nlopt4r
 
-A reusable, pure-Rust library implementing the optimization families in
-the adjacent [MATLAB programs](../Matlab程序/). This is an educational dense
-solver library, **not** a binding to the unrelated upstream NLopt C library.
+A reusable, pure-Rust library implementing the optimization families.
+ This is a dense solver library, **not** a binding to the unrelated upstream NLopt C library.
 
 ## Use from another Rust application or library
 
@@ -45,6 +44,91 @@ or runtime dependencies. Capturing/borrowing closures work. Implement `Objective
 for application types, or pass `(value, gradient)` closures. Use
 `(value, gradient, hessian)` for Newton methods. Solvers accept borrowed trait
 objects as well as concrete problem types.
+
+### Stopping controls and reports
+
+`StopOptions` holds shared stopping criteria. `Options` combines them with Armijo
+settings for unconstrained and least-squares solvers. Trust regions use
+`TrustRegionOptions::stopping` directly, and QP accepts `&StopOptions`; neither
+requires unused Armijo settings.
+
+```rust
+use nlopt4r::{Options, StopOptions, Tolerance};
+
+let options = Options {
+    stopping: StopOptions {
+        max_iterations: 2000,
+        max_evaluations: Some(10_000),
+        gradient_tolerance: 1e-7,
+        step_tolerance: Some(Tolerance { absolute: 1e-12, relative: 1e-10 }),
+        value_tolerance: None,
+    },
+    ..Options::default()
+};
+```
+
+Optional step/value tolerances test `difference <= absolute + relative * scale`.
+The scale is the maximum of the consecutive point norms or absolute objective
+values. These criteria report **stagnation**, not convergence. They are disabled
+by default, preserving the original numerical stopping behavior. Rejected
+trust-region steps and QP working-set changes do not count as accepted progress.
+Scalar search has `ScalarOptions::interval_tolerance`; use
+`minimize_scalar_with_options` for budgets and configurable absolute/relative
+tolerances. The original `minimize_scalar` convenience function remains available.
+
+Optimization reports include `termination_reason` and `evaluations` as well as the existing
+point, objective, stationarity norm and iteration count. Evaluation counts track
+attempted objective, gradient, Hessian, constraint, residual and Jacobian calls,
+including failed callbacks. A combined value/gradient call counts once in each
+category. Unconstrained/trust-region value-only trials do not request gradients. For least squares, each
+residual evaluation counts as an objective evaluation; Jacobians also count as
+gradient evaluations. Constraint calls include their Jacobians.
+QP counts describe evaluated model states rather than external callback calls.
+
+`max_evaluations` limits objective evaluations, including rejected trials and
+PHR inner evaluations. It is never exceeded. QP shares this limit across phase I
+and optimization; synthetic SQP/trust-model evaluations are reported separately
+as `evaluations.subproblem` and do not consume the outer objective budget.
+Convergence takes precedence if the last permitted fully evaluated point
+satisfies optimality criteria.
+
+### Buffered and fallible callbacks
+
+The original `Objective` trait and tuple closures still work through an automatic
+adapter. For expensive application callbacks, use `Function` or implement
+`Evaluator` directly. Input/output slices avoid callback-side gradient allocation;
+the solver itself still uses dense vectors and matrices.
+
+```rust
+use nlopt4r::{EvaluationError, Function, Method, Options, minimize, Vector};
+
+let target = [3.0, -2.0];
+let problem = Function::new(|x: &[f64], gradient: Option<&mut [f64]>| {
+    if let Some(g) = gradient {
+        for i in 0..x.len() { g[i] = x[i] - target[i]; }
+    }
+    Ok::<_, EvaluationError>(
+        0.5 * x.iter().zip(target).map(|(x, t)| (x - t).powi(2)).sum::<f64>()
+    )
+});
+let result = minimize(&problem, &Vector::zeros(2), Method::Bfgs, &Options::default())?;
+```
+
+Fill every requested gradient entry; incomplete/non-finite output is an error.
+Use `Function::with_hessian` for a fallible analytic Hessian. Callback errors can
+use `"message".into()` or `EvaluationError::new(application_error)`; the latter
+retains its display message. `Evaluator::evaluate` permits shared value/gradient
+computation, while value-only trials pass `None`. For existing least-squares or
+constrained types, override `try_residuals`, `try_jacobian`, `try_constraints` or
+`try_lagrangian_hessian` to surface application failures without panics.
+
+**Configuration migration:** move old `Options.max_iterations` and
+`Options.gradient_tolerance` into `Options.stopping`. Move
+`TrustRegionOptions.solver` stopping fields into `TrustRegionOptions.stopping`.
+Pass `&options.stopping` instead of `&options` to QP. For nonlinear constraints,
+shared criteria live in `ConstrainedOptions.solver.stopping`; PHR-specific penalty
+and inner-iteration settings are validated only by PHR. These are intentional
+configuration changes; objective tuples and solver method names are unchanged.
 
 ## Algorithms and MATLAB correspondence
 
@@ -101,7 +185,7 @@ inconsistent system may converge with a nonzero residual.
 Construct a `quadratic::QuadraticProgram` with objective
 `0.5*x'H*x + c'x`, equalities `Ae*x = be`, and inequalities `Ai*x >= bi`.
 Use `QuadraticProgram::unconstrained(hessian, linear)` as a starting constructor.
-Call `quadratic::minimize(&qp, &x0, &options)` or
+Call `quadratic::minimize(&qp, &x0, &stopping)` with `StopOptions`, or
 `quadratic::equality_constrained(&h, &c, &a, &b)`.
 
 The Hessian must be symmetric positive semidefinite. Consistent singular KKT
@@ -114,7 +198,8 @@ iteration count covers the main solve.
 
 ### Nonlinear constraints
 
-Implement `constrained::ConstrainedProblem` (which extends `Objective`) and return
+Implement `constrained::ConstrainedProblem` (which extends `Evaluator`, with an
+automatic adapter for existing `Objective` implementations) and return
 `Constraints` from its `constraints` method:
 
 - `equalities`: `h(x) = 0`, `inequalities`: `g(x) >= 0`.
@@ -122,6 +207,12 @@ Implement `constrained::ConstrainedProblem` (which extends `Objective`) and retu
   arrays in some MATLAB scripts.
 - No constraints of one kind: use an empty vector and a `0 x n` matrix.
   `Constraints::empty(n)` creates both empty sets.
+- `Constraints::equalities_only(values, jacobian)` and `inequalities_only` create
+  validated single-kind constraint sets without manually assembling empty arrays.
+  `Constraints::linear(x, Ae, be, Ai, bi)` evaluates validated linear constraints.
+  `Constraints::from_nonpositive` explicitly converts `c(x)<=0` and its Jacobian
+  to the canonical `g(x)>=0` representation; output multipliers keep the canonical
+  sign convention.
 - Constraint counts must stay constant during the solve.
 - Multipliers use `L = f - mu'h - lambda'g`, with `lambda >= 0`.
 - For exact equality methods, also implement `lagrangian_hessian(x, mu, lambda)`
@@ -153,6 +244,28 @@ point and reports convergence only if the stopping criteria already hold.
 Nested solver exhaustion returns `Error::IterationLimit` with context.
 An optimum reached on the last allowed iteration still reports convergence.
 Always inspect `converged()` or `status` before using a result as an optimum.
+
+`Status::MaxEvaluations` and `Status::Stagnated` are also non-converged results.
+Reports identify whether a gradient, KKT, interval, budget or stagnation criterion
+stopped the solve. Dimension errors include expected and actual shapes; line
+search errors include trial counts and the last step; nested iteration errors
+name the failing solver and its iteration count.
+`Error::SubproblemStopped` distinguishes a phase-I stagnation stop from actual
+iteration exhaustion.
+
+When an error occurs after a valid checkpoint, `Error::last_solution()` exposes
+that point and its diagnostics with `Status::Failed`. `Error::root_cause()` and
+the standard error source chain expose the underlying failure. Checkpoints are
+fully evaluated states, not arbitrary trial points; PHR also retains valid inner
+states. If an evaluation budget is exhausted during a trial or before its
+gradient is evaluated, the returned point is the last valid checkpoint, not
+necessarily the smallest objective seen. Invalid input/initial evaluations may
+have no checkpoint. Use the recovered point as a restart guess, not as a claimed
+optimum.
+
+Scalar error checkpoints also expose the last valid scalar point through
+`last_solution()` as a length-one vector; their `gradient_norm` is NaN because
+scalar search does not evaluate a gradient.
 
 These dense, local algorithms are intended for small/moderate, reasonably scaled
 problems. They do not promise global nonlinear minima, sparse performance,

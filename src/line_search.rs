@@ -1,5 +1,10 @@
 //! Armijo backtracking and bounded scalar minimization.
-use crate::{Error, Objective, Vector, evaluate, finite, positive, vector};
+use crate::{
+    Error, EvaluationCounts, Evaluator, StopOptions, TerminationReason, Tolerance, Vector,
+    evaluate, finite, positive,
+    stopping::{Run, snapshot},
+    vector,
+};
 
 #[derive(Debug, Clone)]
 pub struct ArmijoOptions {
@@ -46,7 +51,7 @@ pub struct Step {
     pub evaluations: usize,
 }
 
-pub fn armijo<P: Objective + ?Sized>(
+pub fn armijo<P: Evaluator + ?Sized>(
     problem: &P,
     x: &Vector<f64>,
     direction: &Vector<f64>,
@@ -61,7 +66,10 @@ pub fn armijo<P: Objective + ?Sized>(
     backtrack(value, gradient.dot(direction), options, |alpha| {
         let trial = x + alpha * direction;
         vector(&trial, x.len(), "line search point")?;
-        finite(problem.value(&trial), "line search objective")
+        finite(
+            problem.evaluate(trial.as_slice(), None)?,
+            "line search objective",
+        )
     })
 }
 
@@ -81,8 +89,10 @@ where
         ));
     }
     let mut alpha = options.initial_step;
+    let mut last_step = alpha;
     for k in 0..options.max_iterations {
         let next = trial(alpha)?;
+        last_step = alpha;
         if next <= value + options.sufficient_decrease * alpha * slope {
             return Ok(Step {
                 alpha,
@@ -92,7 +102,10 @@ where
         }
         alpha *= options.contraction;
     }
-    Err(Error::LineSearchFailed)
+    Err(Error::LineSearchFailed {
+        evaluations: options.max_iterations,
+        last_step,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +122,25 @@ pub struct ScalarSolution {
     pub bracket: (f64, f64),
     pub iterations: usize,
     pub status: crate::Status,
+    pub termination_reason: TerminationReason,
+    pub evaluations: EvaluationCounts,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScalarOptions {
+    pub stopping: StopOptions,
+    pub interval_tolerance: Tolerance,
+}
+impl Default for ScalarOptions {
+    fn default() -> Self {
+        Self {
+            stopping: StopOptions::default(),
+            interval_tolerance: Tolerance {
+                absolute: 1e-8,
+                relative: f64::EPSILON.sqrt(),
+            },
+        }
+    }
 }
 
 /// Minimize a continuous unimodal function on a finite closed interval.
@@ -120,27 +152,108 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
     method: ScalarMethod,
 ) -> Result<ScalarSolution, Error> {
     positive(tolerance, "scalar tolerance")?;
+    let options = ScalarOptions {
+        stopping: StopOptions {
+            max_iterations,
+            ..StopOptions::default()
+        },
+        interval_tolerance: Tolerance {
+            absolute: tolerance,
+            relative: f64::EPSILON.sqrt(),
+        },
+    };
+    minimize_scalar_with_options(f, bounds, method, &options)
+}
+
+pub fn minimize_scalar_with_options<F: Fn(f64) -> f64>(
+    f: F,
+    bounds: (f64, f64),
+    method: ScalarMethod,
+    options: &ScalarOptions,
+) -> Result<ScalarSolution, Error> {
+    options.interval_tolerance.validate()?;
+    let mut run = Run::new(&options.stopping)?;
+    let result = scalar_impl(f, bounds, method, options, &mut run);
+    match result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let last = run.finish(Err(error), "scalar minimization")?;
+            Ok(ScalarSolution {
+                x: last.x[0],
+                value: last.value,
+                bracket: bounds,
+                iterations: last.iterations,
+                status: last.status,
+                termination_reason: last.termination_reason,
+                evaluations: last.evaluations,
+            })
+        }
+    }
+}
+
+fn scalar_impl<F: Fn(f64) -> f64>(
+    f: F,
+    bounds: (f64, f64),
+    method: ScalarMethod,
+    options: &ScalarOptions,
+    run: &mut Run,
+) -> Result<ScalarSolution, Error> {
     let (mut a, mut b) = bounds;
     if !a.is_finite() || !b.is_finite() || a >= b || !(b - a).is_finite() {
         return Err(Error::InvalidInput("scalar bounds"));
     }
-    let eval = |x| finite(f(x), "scalar objective");
-    let endpoints = [(a, eval(a)?), (b, eval(b)?)];
+    let eval = |x: f64, run: &mut Run| {
+        run.charge()?;
+        let value = finite(f(x), "scalar objective")?;
+        if run.last.as_ref().is_none_or(|last| value < last.value) {
+            run.checkpoint(snapshot(
+                Vector::from_element(1, x),
+                value,
+                f64::NAN,
+                0,
+                None,
+            ));
+        }
+        Ok::<_, Error>(value)
+    };
+    let endpoints = [(a, eval(a, run)?), (b, eval(b, run)?)];
     let golden = (3.0 - 5.0_f64.sqrt()) / 2.0;
     let mut x = a + golden * (b - a);
     let mut w = x;
     let mut v = x;
-    let mut fx = eval(x)?;
+    let mut fx = eval(x, run)?;
     let mut fw = fx;
     let mut fv = fx;
     let mut d: f64 = 0.0;
     let mut e: f64 = 0.0;
     let mut k = 0;
-    while k < max_iterations {
+    let reason = loop {
         let mid = 0.5 * (a + b);
-        let tol = tolerance + f64::EPSILON.sqrt() * x.abs();
-        if (x - mid).abs() <= 2.0 * tol - 0.5 * (b - a) {
-            break;
+        let tol =
+            options.interval_tolerance.absolute + options.interval_tolerance.relative * x.abs();
+        let mut best = (x, fx);
+        for &endpoint in &endpoints {
+            if endpoint.1 < best.1 {
+                best = endpoint;
+            }
+        }
+        let reason = run.reason(
+            &Vector::from_element(1, best.0),
+            best.1,
+            k,
+            (x - mid).abs() <= 2.0 * tol - 0.5 * (b - a),
+            TerminationReason::IntervalTolerance,
+            k > 0,
+        );
+        run.record(snapshot(
+            Vector::from_element(1, best.0),
+            best.1,
+            f64::NAN,
+            k,
+            reason,
+        ));
+        if let Some(reason) = reason {
+            break reason;
         }
         let mut parabolic = false;
         if matches!(method, ScalarMethod::Parabolic) && e.abs() > tol {
@@ -175,7 +288,7 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
         } else {
             -tol
         };
-        let fu = eval(u)?;
+        let fu = eval(u, run)?;
         if fu <= fx {
             if u < x {
                 b = x;
@@ -205,9 +318,7 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
             }
         }
         k += 1;
-    }
-    let tol = tolerance + f64::EPSILON.sqrt() * x.abs();
-    let converged = (x - 0.5 * (a + b)).abs() <= 2.0 * tol - 0.5 * (b - a);
+    };
     for (point, value) in endpoints {
         if value < fx {
             x = point;
@@ -221,10 +332,8 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
         value: fx,
         bracket: (a, b),
         iterations: k,
-        status: if converged {
-            crate::Status::Converged
-        } else {
-            crate::Status::MaxIterations
-        },
+        status: snapshot(Vector::from_element(1, x), fx, 0.0, k, Some(reason)).status,
+        termination_reason: reason,
+        evaluations: run.counts,
     })
 }

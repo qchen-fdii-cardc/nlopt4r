@@ -1,6 +1,6 @@
 mod common;
 use common::{Ellipse, close, v};
-use nlopt4r::{Error, Matrix, Objective, Options, Status, Vector, constrained::*};
+use nlopt4r::{Error, Matrix, Objective, Options, Status, StopOptions, Vector, constrained::*};
 
 struct Cylinder;
 impl Objective for Cylinder {
@@ -52,7 +52,7 @@ impl ConstrainedProblem for EqualityCircle {
 fn check(r: &ConstrainedSolution, options: &ConstrainedOptions) {
     assert!(r.solution.converged(), "{r:?}");
     assert!(
-        r.solution.gradient_norm <= options.solver.gradient_tolerance,
+        r.solution.gradient_norm <= options.solver.stopping.gradient_tolerance,
         "{r:?}"
     );
     assert!(
@@ -151,7 +151,10 @@ fn inactive_inequality_uses_projected_phr_gradient() {
 fn constrained_budget_and_invalid_inputs() {
     let options = ConstrainedOptions {
         solver: Options {
-            max_iterations: 0,
+            stopping: StopOptions {
+                max_iterations: 0,
+                ..StopOptions::default()
+            },
             ..Options::default()
         },
         ..ConstrainedOptions::default()
@@ -196,7 +199,7 @@ fn malformed_constraint_jacobian_is_error_not_panic() {
                 method,
                 &ConstrainedOptions::default()
             ),
-            Err(Error::DimensionMismatch(_))
+            Err(Error::DimensionMismatch { .. })
         ));
     }
     assert!(matches!(
@@ -205,6 +208,6 @@ fn malformed_constraint_jacobian_is_error_not_panic() {
             &v(&[1.0, 1.0]),
             &ConstrainedOptions::default()
         ),
-        Err(Error::DimensionMismatch(_))
+        Err(Error::DimensionMismatch { .. })
     ));
 }

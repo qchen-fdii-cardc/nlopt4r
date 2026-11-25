@@ -1,7 +1,10 @@
 //! Convex dense quadratic programming with a feasible active set and phase I.
 //! All inequalities use A_i x >= b_i; multipliers use L = f - lambda' (Ax-b).
 use crate::{
-    Error, Matrix, Options, Solution, Status, Vector, finite, matrix, solution, symmetric, vector,
+    Error, Matrix, Solution, Status, StopOptions, TerminationReason, Vector, finite, matrix,
+    solution,
+    stopping::{Report, Run},
+    symmetric, vector,
 };
 
 pub struct QuadraticProgram {
@@ -19,6 +22,14 @@ pub struct QuadraticSolution {
     pub equality_multipliers: Vector,
     pub inequality_multipliers: Vector,
     pub constraint_violation: f64,
+}
+impl Report for QuadraticSolution {
+    fn solution(&self) -> &Solution {
+        &self.solution
+    }
+    fn solution_mut(&mut self) -> &mut Solution {
+        &mut self.solution
+    }
 }
 
 impl QuadraticProgram {
@@ -103,7 +114,12 @@ pub fn equality_constrained(
     };
     qp.validate()?;
     let (x, multipliers) = kkt(hessian, linear, a, b)?;
-    report(&qp, x, multipliers, Vector::zeros(0), 1, Status::Converged)
+    let mut result = report(&qp, x, multipliers, Vector::zeros(0), 1, Status::Converged)?;
+    result.solution.terminate(TerminationReason::KktTolerance);
+    result.solution.evaluations.objective = 1;
+    result.solution.evaluations.gradient = 1;
+    result.solution.evaluations.constraints = 1;
+    Ok(result)
 }
 
 pub(crate) fn kkt(
@@ -195,7 +211,8 @@ fn working_matrix(qp: &QuadraticProgram, active: &[usize]) -> Matrix {
 fn active_set(
     qp: &QuadraticProgram,
     mut x: Vector,
-    options: &Options,
+    options: &StopOptions,
+    run: &mut Run<QuadraticSolution>,
 ) -> Result<QuadraticSolution, Error> {
     let tol = options.gradient_tolerance;
     let ne = qp.equality_rhs.len();
@@ -213,6 +230,19 @@ fn active_set(
         }
     }
     for k in 0..=options.max_iterations {
+        run.charge()?;
+        run.counts.gradient += 1;
+        run.counts.constraints += 1;
+        let accepted = run.last.as_ref().is_some_and(|last| last.solution.x != x);
+        let mut current = report(
+            qp,
+            x.clone(),
+            Vector::zeros(ne),
+            Vector::zeros(ni),
+            k,
+            Status::MaxIterations,
+        )?;
+        run.checkpoint(current.clone());
         let a = working_matrix(qp, &active);
         let g = &qp.hessian * &x + &qp.linear;
         let mut rhs = Vector::zeros(a.nrows());
@@ -233,11 +263,25 @@ fn active_set(
             .filter(|(j, _)| lam[ne + j] < -tol)
             .min_by(|(j, _), (l, _)| lam[ne + j].total_cmp(&lam[ne + l]));
         let stationary = (&g - a.transpose() * &lam).norm() <= tol;
-        if stationary && negative.is_none() && violation(qp, &x) <= tol {
-            return report(qp, x, mu, lambda, k, Status::Converged);
+        let converged = stationary && negative.is_none() && violation(qp, &x) <= tol;
+        current.equality_multipliers = mu;
+        current.inequality_multipliers = lambda;
+        current.solution.gradient_norm =
+            finite((&g - a.transpose() * &lam).norm(), "QP stationarity")?;
+        let reason = run.reason(
+            &x,
+            current.solution.value,
+            k,
+            converged,
+            TerminationReason::KktTolerance,
+            accepted,
+        );
+        if let Some(reason) = reason {
+            current.solution.terminate(reason);
         }
-        if k == options.max_iterations {
-            return report(qp, x, mu, lambda, k, Status::MaxIterations);
+        let current = run.record(current);
+        if reason.is_some() {
+            return Ok(current);
         }
         if stationary && let Some((index, _)) = negative {
             active.remove(index);
@@ -271,11 +315,40 @@ fn active_set(
 pub fn minimize(
     qp: &QuadraticProgram,
     x0: &Vector,
-    options: &Options,
+    options: &StopOptions,
 ) -> Result<QuadraticSolution, Error> {
     qp.validate()?;
     crate::initial(x0, options)?;
     vector(x0, qp.linear.len(), "QP initial point")?;
+    let mut run = Run::new(options)?;
+    let result = minimize_impl(qp, x0, options, &mut run);
+    run.finish(result, "quadratic programming")
+}
+
+fn minimize_impl(
+    qp: &QuadraticProgram,
+    x0: &Vector,
+    options: &StopOptions,
+    run: &mut Run<QuadraticSolution>,
+) -> Result<QuadraticSolution, Error> {
+    run.charge()?;
+    run.counts.gradient += 1;
+    run.counts.constraints += 1;
+    let mut initial = report(
+        qp,
+        x0.clone(),
+        Vector::zeros(qp.equality_rhs.len()),
+        Vector::zeros(qp.inequality_rhs.len()),
+        0,
+        Status::MaxIterations,
+    )?;
+    if initial.solution.gradient_norm <= options.gradient_tolerance
+        && initial.constraint_violation <= options.gradient_tolerance
+    {
+        initial.solution.terminate(TerminationReason::KktTolerance);
+        return Ok(run.record(initial));
+    }
+    run.record(initial);
     let n = x0.len();
     let mut x = x0.clone();
     if qp.equalities.nrows() > 0 {
@@ -315,14 +388,35 @@ pub fn minimize(
         let mut start = Vector::zeros(n + 1);
         start.rows_mut(0, n).copy_from(&x);
         start[n] = violation(qp, &x) + 1.0;
-        let result = active_set(&phase, start, options)?;
+        let phase_options = StopOptions {
+            max_evaluations: options
+                .max_evaluations
+                .map(|n| n.saturating_sub(run.counts.objective)),
+            ..options.clone()
+        };
+        if phase_options.max_evaluations == Some(0) {
+            return Err(Error::EvaluationBudgetExceeded);
+        }
+        let mut phase_run = Run::new(&phase_options)?;
+        let phase_result = active_set(&phase, start, &phase_options, &mut phase_run);
+        let phase_counts = phase_run.counts;
+        let result = phase_run.finish(phase_result, "QP phase I");
+        run.counts += phase_counts;
+        let result = result?;
+        if result.solution.status == Status::MaxEvaluations {
+            return Err(Error::EvaluationBudgetExceeded);
+        }
         if !result.solution.converged() {
-            return Err(Error::IterationLimit("QP phase I"));
+            return Err(Error::SubproblemStopped {
+                solver: "QP phase I",
+                reason: result.solution.termination_reason,
+                iterations: result.solution.iterations,
+            });
         }
         if result.solution.x[n] > options.gradient_tolerance {
             return Err(Error::Infeasible);
         }
         x = result.solution.x.rows(0, n).into_owned();
     }
-    active_set(qp, x, options)
+    active_set(qp, x, options, run)
 }

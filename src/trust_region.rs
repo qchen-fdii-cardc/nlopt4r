@@ -1,12 +1,14 @@
 //! Newton trust regions with a spectral solution of the quadratic subproblem.
 use crate::{
-    Error, Matrix, Objective, Options, Solution, Vector, evaluate, finite, hessian, initial,
-    positive, solution, symmetric, vector,
+    Error, Evaluator, Matrix, Solution, StopOptions, TerminationReason, Vector, finite, initial,
+    positive,
+    stopping::{Run, snapshot},
+    symmetric, vector,
 };
 
 #[derive(Debug, Clone)]
 pub struct TrustRegionOptions {
-    pub solver: Options,
+    pub stopping: StopOptions,
     pub initial_radius: f64,
     pub maximum_radius: f64,
     pub acceptance_threshold: f64,
@@ -15,7 +17,7 @@ pub struct TrustRegionOptions {
 impl Default for TrustRegionOptions {
     fn default() -> Self {
         Self {
-            solver: Options::default(),
+            stopping: StopOptions::default(),
             initial_radius: 1.0,
             maximum_radius: 2.0,
             acceptance_threshold: 0.15,
@@ -93,12 +95,12 @@ pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep
     })
 }
 
-pub fn minimize<P: Objective + ?Sized>(
+pub fn minimize<P: Evaluator + ?Sized>(
     problem: &P,
     x0: &Vector,
     options: &TrustRegionOptions,
 ) -> Result<Solution, Error> {
-    initial(x0, &options.solver)?;
+    initial(x0, &options.stopping)?;
     positive(options.initial_radius, "initial trust radius")?;
     positive(options.maximum_radius, "maximum trust radius")?;
     if options.initial_radius > options.maximum_radius
@@ -106,28 +108,51 @@ pub fn minimize<P: Objective + ?Sized>(
     {
         return Err(Error::InvalidInput("trust region options"));
     }
+    let mut run = Run::new(&options.stopping)?;
+    let result = minimize_impl(problem, x0, options, &mut run);
+    run.finish(result, "trust-region minimization")
+}
+
+fn minimize_impl<P: Evaluator + ?Sized>(
+    problem: &P,
+    x0: &Vector,
+    options: &TrustRegionOptions,
+    run: &mut Run,
+) -> Result<Solution, Error> {
     let mut x = x0.clone();
     let mut radius = options.initial_radius;
-    for k in 0..=options.solver.max_iterations {
-        let (f, g) = evaluate(problem, &x)?;
-        let converged = g.norm() <= options.solver.gradient_tolerance;
-        if converged || k == options.solver.max_iterations {
-            return Ok(solution(x, f, g.norm(), k, converged));
+    let mut accepted = false;
+    for k in 0..=options.stopping.max_iterations {
+        let (f, g) = run.evaluate(problem, &x)?;
+        let norm = finite(g.norm(), "gradient norm")?;
+        let reason = run.reason(
+            &x,
+            f,
+            k,
+            norm <= options.stopping.gradient_tolerance,
+            TerminationReason::GradientTolerance,
+            accepted,
+        );
+        let report = run.record(snapshot(x.clone(), f, norm, k, reason));
+        if reason.is_some() {
+            return Ok(report);
         }
-        let step = subproblem(&g, &hessian(problem, &x)?, radius)?;
+        let step = subproblem(&g, &run.hessian(problem, &x)?, radius)?;
+        run.counts.subproblem += 1;
         if step.value >= 0.0 {
             return Err(Error::InvalidInput("trust model has no predicted decrease"));
         }
         let trial = &x + &step.step;
         vector(&trial, x.len(), "trust iterate")?;
-        let next_f = finite(problem.value(&trial), "objective")?;
+        let next_f = run.value(problem, &trial)?;
         let ratio = (f - next_f) / -step.value;
         if ratio <= options.acceptance_threshold {
             radius *= 0.5;
         } else if ratio >= 0.75 && step.step.norm() >= 0.99 * radius {
             radius = (2.0 * radius).min(options.maximum_radius);
         }
-        if ratio > options.acceptance_threshold {
+        accepted = ratio > options.acceptance_threshold;
+        if accepted {
             x = trial;
         }
         positive(radius, "trust radius underflow")?;

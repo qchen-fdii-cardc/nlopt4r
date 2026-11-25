@@ -95,7 +95,7 @@ fn exact_equality_methods_solve_matlab_five_variable_problem() {
         .unwrap();
         assert!(r.solution.converged(), "{method:?}: {r:?}");
         assert!(
-            r.solution.gradient_norm <= options.solver.gradient_tolerance,
+            r.solution.gradient_norm <= options.solver.stopping.gradient_tolerance,
             "{r:?}"
         );
         assert!(
@@ -139,7 +139,8 @@ fn root_matlab_four_variable_example_agrees_with_direct_qp() {
         inequalities: c.inequality_jacobian,
         inequality_rhs: -c.inequalities,
     };
-    let expected = nlopt4r::quadratic::minimize(&qp, &Vector::zeros(4), &options.solver).unwrap();
+    let expected =
+        nlopt4r::quadratic::minimize(&qp, &Vector::zeros(4), &options.solver.stopping).unwrap();
     for r in [
         constrained::minimize(&FourVariable, &Vector::zeros(4), Method::Sqp, &options).unwrap(),
         constrained::augmented_lagrangian(&FourVariable, &Vector::zeros(4), &options).unwrap(),
