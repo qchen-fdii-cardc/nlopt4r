@@ -16,7 +16,12 @@ Do not attempt to duplicate every NLopt algorithm before a first release.
   - [x] External bounded pattern-search application using public utilities.
   - [x] Native comparisons isolated in unpublished tooling; nine tests preserved.
   - [ ] Compatibility local namespace, benchmark smoke runner and baseline.
-- [ ] M2 DE/PSO algorithms, conformance tests and 30-seed report.
+- [ ] M2 global methods:
+  - [x] Synchronous DE/rand/1/bin and inertia-weight global-best PSO.
+  - [x] Budget, bounds/fixed-coordinate, seed, crossover/donor, synchronous PSO,
+    observer/cancellation and error-recovery conformance tests.
+  - [x] Typed reports, documented defaults, theory/references and runnable example.
+  - [ ] Measured 30-seed benchmark report.
 - [ ] M3 scalable local algorithms and measured complexity.
 - [ ] M4 numerical robustness and bounded local optimization.
 - [ ] M5 broad problem catalog, standardized adapters, theory, CI and coverage.

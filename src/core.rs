@@ -97,10 +97,10 @@ impl<'a, P: Evaluator + ?Sized> EvaluationContext<'a, P> {
         if self.cancelled {
             return Some(SearchTermination::Cancelled);
         }
-        if let (Some(best), Some(target)) = (&self.best, self.budget.target_value) {
-            if best.value <= target {
-                return Some(SearchTermination::TargetReached);
-            }
+        if let (Some(best), Some(target)) = (&self.best, self.budget.target_value)
+            && best.value <= target
+        {
+            return Some(SearchTermination::TargetReached);
         }
         if self.counts.objective >= self.budget.max_evaluations {
             return Some(SearchTermination::MaxEvaluations);

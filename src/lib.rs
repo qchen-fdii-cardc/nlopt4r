@@ -18,6 +18,7 @@
 pub mod constrained;
 pub mod core;
 mod evaluation;
+pub mod global;
 pub mod least_squares;
 pub mod line_search;
 pub mod problem;
@@ -27,7 +28,7 @@ pub mod trust_region;
 mod unconstrained;
 pub mod utils;
 
-pub use evaluation::{EvaluationError, Evaluator, Function, value_only};
+pub use evaluation::{EvaluationError, Evaluator, Function, ValueOnly, value_only};
 pub use problem::Bounds;
 pub use stopping::{EvaluationCounts, StopOptions, TerminationReason, Tolerance};
 

@@ -11,6 +11,8 @@ remain release blockers.
 
 The [foundation guide](docs/FOUNDATIONS.md) covers validated bounds, shared
 evaluation budgets, observers and the external algorithm extension example.
+Seeded [DE and PSO](docs/GLOBAL.md) provide bounded, derivative-free population
+search; run `cargo run --example global_search`.
 
 ## Use from another Rust application or library
 
