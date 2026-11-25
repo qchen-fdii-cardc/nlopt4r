@@ -71,3 +71,10 @@ jobs:
             --output target/smoke.jsonl
           cargo run --release --locked -p nlopt4r-bench -- \
             --summarize target/smoke.jsonl
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --suite smoke --algorithms lbfgs,de,pso \
+            --seeds 0..2 --dimension 2 --budget-per-dimension 2000 \
+            --shift on --rotate on --instance-seed 42 \
+            --output target/transformed-smoke.jsonl
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --summarize target/transformed-smoke.jsonl

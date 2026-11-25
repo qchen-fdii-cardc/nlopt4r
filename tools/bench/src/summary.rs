@@ -1,5 +1,6 @@
 use crate::{
     catalog::CATALOG,
+    instance::Transformation,
     runner::{ALGORITHMS, Environment, RunRecord},
 };
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub struct Summary {
     pub budget: usize,
     pub target_value: f64,
     pub environment: Environment,
+    pub transformation: Option<Transformation>,
     pub runs: usize,
     pub successes: usize,
     pub errors: usize,
@@ -33,6 +35,16 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
         budget: usize,
         target_bits: u64,
         environment: Environment,
+        transformation: Option<InstanceKey>,
+    }
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct InstanceKey {
+        version: u32,
+        seed: u64,
+        shifted: bool,
+        rotated: bool,
+        shift_bits: Vec<u64>,
+        rotation_bits: Vec<Vec<u64>>,
     }
     let mut groups: BTreeMap<Key, Vec<&RunRecord>> = BTreeMap::new();
     for r in records {
@@ -44,6 +56,18 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                 budget: r.budget,
                 target_bits: r.target_value.to_bits(),
                 environment: r.environment.clone(),
+                transformation: r.transformation.as_ref().map(|t| InstanceKey {
+                    version: t.version,
+                    seed: t.seed,
+                    shifted: t.shift_enabled,
+                    rotated: t.rotation_enabled,
+                    shift_bits: t.shift.iter().map(|v| v.to_bits()).collect(),
+                    rotation_bits: t
+                        .rotation
+                        .iter()
+                        .map(|row| row.iter().map(|v| v.to_bits()).collect())
+                        .collect(),
+                }),
             })
             .or_default()
             .push(r);
@@ -59,6 +83,7 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                     budget,
                     target_bits,
                     environment,
+                    transformation: _,
                 },
                 runs,
             )| {
@@ -78,6 +103,7 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                     budget,
                     target_value: f64::from_bits(target_bits),
                     environment,
+                    transformation: runs[0].transformation.clone(),
                     runs: runs.len(),
                     successes,
                     errors: runs.iter().filter(|r| r.error.is_some()).count(),
@@ -196,7 +222,11 @@ fn validate(r: &RunRecord) -> Result<(), String> {
     if problem.dimension(r.dimension)? != r.dimension {
         return Err("invalid fixed dimension".into());
     }
-    if r.schema_version != 1
+    if let Some(t) = &r.transformation {
+        t.validate(problem, r.dimension)?;
+    }
+    if !matches!(r.schema_version, 1 | 2)
+        || (r.schema_version == 1 && r.transformation.is_some())
         || r.budget == 0
         || r.evaluations > r.budget
         || !r.seconds.is_finite()
@@ -298,6 +328,47 @@ mod tests {
             assert_eq!(parsed[0].history.len(), r.history.len());
         }
         assert!(read_records(std::io::Cursor::new(b"{bad}\n"), false).is_err());
+    }
+    #[test]
+    fn transformed_records_roundtrip_separate_instances_and_reject_corruption() {
+        let mut a = record();
+        a.transformation = Transformation::new(&CATALOG[0], a.dimension, true, true, 42).unwrap();
+        for csv in [false, true] {
+            let mut out = Vec::new();
+            if csv {
+                writeln!(out, "{CSV_HEADER}").unwrap();
+            }
+            write_record(&mut out, &a, csv).unwrap();
+            let parsed = read_records(std::io::Cursor::new(out), csv).unwrap();
+            assert_eq!(parsed[0].transformation, a.transformation);
+        }
+        let baseline = record();
+        let mut other_seed = a.clone();
+        other_seed.transformation =
+            Transformation::new(&CATALOG[0], a.dimension, true, true, 43).unwrap();
+        let mut shift_only = a.clone();
+        shift_only.transformation =
+            Transformation::new(&CATALOG[0], a.dimension, true, false, 42).unwrap();
+        let mut other_matrix = a.clone();
+        // Flip two columns: another proper rotation with the same seed label.
+        for row in &mut other_matrix.transformation.as_mut().unwrap().rotation {
+            row[0] = -row[0];
+            row[1] = -row[1];
+        }
+        validate(&other_matrix).unwrap();
+        assert_eq!(
+            summarize(&[baseline, a.clone(), other_seed, shift_only, other_matrix]).len(),
+            5
+        );
+        a.transformation.as_mut().unwrap().rotation[0][0] += 0.1;
+        let bad = format!("{}\n", serde_json::to_string(&a).unwrap());
+        assert!(read_records(std::io::Cursor::new(bad), false).is_err());
+
+        let mut legacy = serde_json::to_value(record()).unwrap();
+        legacy["schema_version"] = 1.into();
+        legacy.as_object_mut().unwrap().remove("transformation");
+        let parsed = read_records(std::io::Cursor::new(format!("{legacy}\n")), false).unwrap();
+        assert!(parsed[0].transformation.is_none());
     }
     #[test]
     fn summaries_do_not_mix_budgets_or_targets() {

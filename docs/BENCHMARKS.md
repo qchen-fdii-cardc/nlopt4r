@@ -91,6 +91,100 @@ An opt-in BFGS/external-only build can use
   Missing optional CPU/revision metadata is explicitly `unavailable`.
   Wall times are observations, not portable performance claims.
 
+## Optional recorded shifts and rotations
+
+The main harness and native L-BFGS runner accept independent switches:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--shift on\|off` | `off` | Move a known minimizer to a seeded interior point |
+| `--rotate on\|off` | `off` | Apply a seeded proper orthogonal coordinate rotation |
+| `--instance-seed N` | `0` | Unsigned 64-bit instance seed, separate from optimizer `--seeds` |
+
+Use the **same instance seed**, problem, dimension, budgets and optimizer seeds
+for paired on/off comparisons:
+
+```sh
+cargo run --release --locked -p nlopt4r-bench -- \
+  --suite smoke --algorithms de,pso,external-pattern --seeds 0..30 \
+  --dimension 2 --budget-per-dimension 2000 \
+  --shift off --rotate off --instance-seed 42 --output target/plain.jsonl
+cargo run --release --locked -p nlopt4r-bench -- \
+  --suite smoke --algorithms de,pso,external-pattern --seeds 0..30 \
+  --dimension 2 --budget-per-dimension 2000 \
+  --shift on --rotate on --instance-seed 42 --output target/transformed.jsonl
+cargo run --release --locked -p nlopt4r-bench -- \
+  --summarize target/transformed.jsonl
+```
+
+Also run shift-only and rotation-only to distinguish translation from orientation.
+Repeat with several instance seeds for broader evidence; optimizer seeds repeat
+searches on **one fixed landscape**, not random landscapes. The external pattern
+example remains deterministic: its 30 seed labels repeat the same midpoint start.
+
+### Mathematical definition and reproducibility
+
+For base formula `f`, a known reference point `r`, recorded translation `s` and
+recorded rotation `Q`, evaluate
+
+```text
+z = r + Q * (x - (r + s))
+F(x) = f(z)
+gradient F(x) = transpose(Q) * gradient f(z)
+```
+
+Disabled rotation means identity; disabled shift means zero. With both off,
+the original evaluator is used directly, with no affine roundoff or changed
+initialization RNG. With rotation only, `r` is unchanged. With shift on, the
+new reference `r+s` is sampled uniformly in the central 60% of each original
+coordinate interval, so it remains feasible and need not be the center.
+The reference **value and target remain unchanged**. Any constraint violation
+is evaluated in base coordinates as well (general constrained catalog entries
+are still excluded from these runner suites).
+
+Instance generation uses ChaCha8 (`rand_chacha` 0.9), a stable problem-ID/dimension
+mix, and separate shift/rotation streams. Toggling rotation does not change the
+shift, and optimizer seeds/algorithm order do not affect either. Gaussian QR
+with diagonal sign correction generates an isotropic orthogonal basis; a final
+sign correction gives determinant +1. One-dimensional proper rotation is
+necessarily identity. These are custom affine instances, **not COCO/BBOB**.
+
+New main-harness records use schema version **2**, with a `transformation`
+object containing generator version, instance seed, enabled flags, complete
+translation vector and row-major rotation matrix. Untransformed records contain
+`null`. JSON uses round-trip float parsing so stored coefficients can be
+replayed exactly on the same arithmetic implementation. CSV's `record_json`
+retains the same information. Summaries include that object and group by its
+complete identity; off/on, different seeds or coefficients are never pooled.
+Legacy schema-1 records without transformations remain readable. Corrupt
+dimensions, non-finite coefficients, nonorthogonal/improper rotations, invalid
+versions and infeasible reference points are explicit read errors.
+
+The public tooling adapter `nlopt4r_bench::instance::Transformation` exposes
+`new`, `to_base`, `gradient` and `reference_point` for replay/other runners.
+The catalog itself is unchanged, and the published solver crate has no new
+dependency or random problem transformation.
+
+### Interpret difficulty carefully
+
+The **outer axis-aligned box and initial solver points stay unchanged**. It is
+the landscape that moves/rotates. Thus boundary truncation and the relation
+between a start and the optimum can change; this is not an exact reparameterization
+of the same bounded feasible set. An orthogonal rotation preserves local
+eigenvalues, not separability or a coordinate algorithm's performance.
+An isotropic sphere is rotation-invariant, and no transformation guarantees
+that a problem becomes harder for every algorithm.
+
+Base formulas are extended beyond their nominal boxes when needed; the original
+box is not imposed a second time in base coordinates. Domain-sensitive formulas
+(notably the Gaussian-fit width denominator), exponential overflow or extreme
+unbounded local trials can consequently fail. Such non-finite evaluations are
+recorded as solver errors, never silently clamped, skipped or given a penalty.
+The known transformed reference remains feasible and has the original value.
+Transform application and chain-rule overhead are included in solve time;
+instance generation is outside the timer. Compare success rates and
+failure-inclusive ERT before drawing timing conclusions.
+
 ## Public catalog interface for other runners
 
 All catalog types are under `nlopt4r_bench::catalog`:
@@ -203,8 +297,11 @@ Analytic derivative work is included in time; objective and gradient requests
 are counted separately. C callbacks record errors and return NaN because their
 ABI cannot return a Rust error; any recorded solver error makes the command fail.
 
-Its JSONL schema `nlopt4r-native-v1` is intentionally separate from the main
-harness and is not accepted by `--summarize`. Records include first-hit and
+Its new JSONL schema `nlopt4r-native-v2` is intentionally separate from the main
+harness and is not accepted by `--summarize`. It accepts the same shift/rotation/
+instance-seed options and records the same transformation object (or `null`).
+The historical baseline retains its original `nlopt4r-native-v1` schema.
+Records include first-hit and
 full-run costs, termination/errors, compiler, revision, dirty-tree status,
 profile and algorithm versions. Existing output files are never overwritten.
 Do not pool these unbounded experiments with the finite-box benchmark groups

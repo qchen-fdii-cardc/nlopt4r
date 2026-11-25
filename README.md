@@ -24,6 +24,9 @@ complexity and references. The [benchmark guide](docs/BENCHMARKS.md) documents
 the verified problem catalog, repeatable runs and failure-inclusive summaries.
 See the [measured baseline](docs/BENCHMARK_RESULTS.md) for 30-seed results,
 native comparisons, coverage and known limitations.
+Benchmark runners support independent seeded shift/rotation switches with
+recorded coefficients; see the [instance protocol](docs/BENCHMARKS.md#optional-recorded-shifts-and-rotations)
+for paired orientation/center-bias comparisons.
 
 ## Generated API documentation
 

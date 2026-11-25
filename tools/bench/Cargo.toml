@@ -13,6 +13,6 @@ external-pattern = ["dep:nlopt4r-extension-example"]
 [dependencies]
 nlopt4r = { path = "../.." }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 nlopt4r-extension-example = { path = "../extension", optional = true }
 

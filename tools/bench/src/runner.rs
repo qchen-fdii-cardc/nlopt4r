@@ -1,4 +1,7 @@
-use crate::catalog::{CATALOG, Group, Problem};
+use crate::{
+    catalog::{CATALOG, Group, Problem},
+    instance::Transformation,
+};
 use nlopt4r::{Error, Evaluator, Method, Options, Vector};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, time::Instant};
@@ -31,6 +34,9 @@ pub struct Config {
     pub budget_per_dimension: usize,
     pub dimension: usize,
     pub output: String,
+    pub shift: bool,
+    pub rotate: bool,
+    pub instance_seed: u64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -41,6 +47,9 @@ impl Default for Config {
             budget_per_dimension: 1000,
             dimension: 4,
             output: "benchmark.jsonl".into(),
+            shift: false,
+            rotate: false,
+            instance_seed: 0,
         }
     }
 }
@@ -124,6 +133,9 @@ pub struct RunRecord {
     pub error: Option<String>,
     pub history: Vec<History>,
     pub environment: Environment,
+    /// Absent in legacy schema-1 records and untransformed schema-2 records.
+    #[serde(default)]
+    pub transformation: Option<Transformation>,
 }
 struct State {
     evaluations: usize,
@@ -134,6 +146,7 @@ struct State {
 }
 struct Measured<'a> {
     problem: &'a Problem,
+    transformation: Option<&'a Transformation>,
     budget: usize,
     target: f64,
     start: Instant,
@@ -159,7 +172,9 @@ impl Measured<'_> {
             return Err(Error::EvaluationBudgetExceeded);
         }
         s.evaluations += 1;
-        let value = self.problem.value(x);
+        let transformed = self.transformation.map(|t| t.to_base(self.problem, x));
+        let base_x = transformed.as_deref().unwrap_or(x);
+        let value = self.problem.value(base_x);
         if !value.is_finite() {
             return Err(Error::NonFinite("benchmark objective"));
         }
@@ -167,7 +182,7 @@ impl Measured<'_> {
         let feasible = x
             .iter()
             .all(|&v| v >= self.problem.bounds.0 && v <= self.problem.bounds.1)
-            && self.problem.violation(x) <= 1e-8;
+            && self.problem.violation(base_x) <= 1e-8;
         if feasible && s.best.as_ref().is_none_or(|(v, _)| value < *v) {
             s.best = Some((value, x.to_vec()));
             let evaluation = s.evaluations;
@@ -189,7 +204,15 @@ impl Evaluator for Measured<'_> {
         if let Some(g) = gradient {
             self.state.borrow_mut().gradients += 1;
             if self.problem.analytic {
-                g.copy_from_slice(&self.problem.gradient(x));
+                let base_gradient = match self.transformation {
+                    Some(t) => self.problem.gradient(&t.to_base(self.problem, x)),
+                    None => self.problem.gradient(x),
+                };
+                let gradient = match self.transformation {
+                    Some(t) => t.gradient(&base_gradient),
+                    None => base_gradient,
+                };
+                g.copy_from_slice(&gradient);
             } else {
                 let mut probe = x.to_vec();
                 for i in 0..x.len() {
@@ -262,8 +285,11 @@ pub fn run(
         .ok_or("invalid or overflowing budget")?;
     let (_, reference) = p.reference(n);
     let target = reference + 1e-6 * (1.0 + reference.abs());
+    let transformation =
+        Transformation::new(p, n, config.shift, config.rotate, config.instance_seed)?;
     let measured = Measured {
         problem: p,
+        transformation: transformation.as_ref(),
         budget,
         target,
         start: Instant::now(),
@@ -382,7 +408,7 @@ pub fn run(
         Err(e) => ("Failed".into(), Some(e.to_string())),
     };
     Ok(RunRecord {
-        schema_version: 1,
+        schema_version: 2,
         problem: p.id.into(),
         group: format!("{:?}", p.group),
         algorithm: algorithm.into(),
@@ -410,6 +436,7 @@ pub fn run(
         error,
         history: s.history,
         environment: environment.clone(),
+        transformation,
     })
 }
 
@@ -426,6 +453,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Config, Option<S
             "--dimension",
             "--output",
             "--summarize",
+            "--shift",
+            "--rotate",
+            "--instance-seed",
         ]
         .contains(&key.as_str())
         {
@@ -469,6 +499,21 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<(Config, Option<S
             "--dimension" => config.dimension = value.parse().map_err(|_| "invalid dimension")?,
             "--output" => config.output = value,
             "--summarize" => summarize = Some(value),
+            "--shift" | "--rotate" => {
+                let enabled = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(format!("{key} must be on or off")),
+                };
+                if key == "--shift" {
+                    config.shift = enabled;
+                } else {
+                    config.rotate = enabled;
+                }
+            }
+            "--instance-seed" => {
+                config.instance_seed = value.parse().map_err(|_| "invalid instance seed")?
+            }
             _ => unreachable!(),
         }
     }
@@ -506,17 +551,28 @@ mod tests {
             vec!["--dimension", "129"],
             vec!["--algorithms", "bfgs,bfgs"],
             vec!["--suite"],
+            vec!["--shift", "yes"],
+            vec!["--rotate", "true"],
+            vec!["--instance-seed", "-1"],
         ] {
             assert!(parse(args.into_iter().map(str::to_owned)).is_err());
         }
         let (c, _) = parse(["--seeds", "0..30"].into_iter().map(str::to_owned)).unwrap();
         assert_eq!(c.seeds, (0..30).collect::<Vec<_>>());
+        let (c, _) = parse(
+            ["--shift", "on", "--rotate", "off", "--instance-seed", "17"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert!(c.shift && !c.rotate && c.instance_seed == 17);
     }
     #[test]
     fn counted_derivative_budget_includes_partial_probes() {
         let p = CATALOG.iter().find(|p| p.id == "alpine").unwrap();
         let measured = Measured {
             problem: p,
+            transformation: None,
             budget: 4,
             target: 1e-6,
             start: Instant::now(),
@@ -547,6 +603,7 @@ mod tests {
             let x = [0.31, 0.48, 0.65, 0.82];
             let measured = Measured {
                 problem: p,
+                transformation: None,
                 budget: 20,
                 target: 1e-6,
                 start: Instant::now(),
@@ -634,6 +691,74 @@ mod tests {
             let record = run(&CATALOG[0], algorithm, 0, &config, &environment()).unwrap();
             assert!(record.evaluations <= record.budget, "{algorithm}");
             assert!(record.error.is_none(), "{algorithm}: {:?}", record.error);
+        }
+    }
+
+    #[test]
+    fn transformed_instances_are_shared_across_algorithms_and_optimizer_seeds() {
+        let problem = CATALOG.iter().find(|p| p.id == "booth").unwrap();
+        for (shift, rotate) in [(false, false), (true, false), (false, true), (true, true)] {
+            let config = Config {
+                shift,
+                rotate,
+                instance_seed: 123,
+                dimension: 2,
+                budget_per_dimension: 2,
+                ..Default::default()
+            };
+            let a = run(problem, "bfgs", 4, &config, &environment()).unwrap();
+            assert_eq!(a.transformation.is_some(), shift || rotate);
+            for algorithm in ALGORITHMS.iter().filter(|name| algorithm_available(name)) {
+                let b = run(problem, algorithm, 9, &config, &environment()).unwrap();
+                assert_eq!(a.transformation, b.transformation);
+                assert!(b.evaluations <= b.budget, "{algorithm}");
+                assert!(b.error.is_none(), "{algorithm}: {:?}", b.error);
+            }
+        }
+    }
+
+    #[test]
+    fn transformed_analytic_and_counted_gradients_use_solver_coordinates() {
+        for id in ["ellipsoid", "alpine"] {
+            let p = CATALOG.iter().find(|p| p.id == id).unwrap();
+            let t = Transformation::new(p, 3, true, true, 7).unwrap().unwrap();
+            let measured = Measured {
+                problem: p,
+                transformation: Some(&t),
+                budget: 20,
+                target: 1e-6,
+                start: Instant::now(),
+                state: RefCell::new(State {
+                    evaluations: 0,
+                    gradients: 0,
+                    best: None,
+                    history: Vec::new(),
+                    hit: None,
+                }),
+            };
+            let x = [0.31, 0.48, 0.65];
+            let mut gradient = [0.0; 3];
+            measured.evaluate(&x, Some(&mut gradient)).unwrap();
+            assert_eq!(
+                measured.state.borrow().evaluations,
+                if p.analytic { 1 } else { 7 }
+            );
+            for i in 0..3 {
+                let mut plus = x;
+                let mut minus = x;
+                plus[i] += 1e-6;
+                minus[i] -= 1e-6;
+                let expected =
+                    (p.value(&t.to_base(p, &plus)) - p.value(&t.to_base(p, &minus))) / 2e-6;
+                assert!(
+                    (gradient[i] - expected).abs() < 1e-5 * (1.0 + expected.abs()),
+                    "{id}: {} versus {expected}",
+                    gradient[i]
+                );
+            }
+            // Targets must be evaluated in transformed coordinates as well.
+            measured.evaluate(&t.reference_point(p), None).unwrap();
+            assert!(measured.state.borrow().hit.is_some());
         }
     }
 }

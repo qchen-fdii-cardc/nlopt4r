@@ -2,6 +2,7 @@ use nlopt::{Algorithm, Nlopt, Target};
 use nlopt4r::utils::{ChaCha8Rng, SeedableRng};
 use nlopt4r::{Bounds, Error, Evaluator, Vector};
 use nlopt4r_bench::catalog::{CATALOG, Problem};
+use nlopt4r_bench::instance::Transformation;
 use serde_json::json;
 use std::{
     cell::{Cell, RefCell},
@@ -12,6 +13,7 @@ use std::{
 
 struct Measured<'a> {
     problem: &'a Problem,
+    transformation: Option<&'a Transformation>,
     target: f64,
     started: Instant,
     calls: Cell<usize>,
@@ -22,13 +24,19 @@ struct Measured<'a> {
 impl Evaluator for Measured<'_> {
     fn evaluate(&self, x: &[f64], gradient: Option<&mut [f64]>) -> Result<f64, Error> {
         self.calls.set(self.calls.get() + 1);
-        let value = self.problem.value(x);
+        let base = self.transformation.map(|t| t.to_base(self.problem, x));
+        let base_x = base.as_deref().unwrap_or(x);
+        let value = self.problem.value(base_x);
         if !value.is_finite() {
             return Err(Error::NonFinite("reference objective"));
         }
         if let Some(g) = gradient {
             self.gradients.set(self.gradients.get() + 1);
-            let computed = self.problem.gradient(x);
+            let computed = self.problem.gradient(base_x);
+            let computed = match self.transformation {
+                Some(t) => t.gradient(&computed),
+                None => computed,
+            };
             nlopt4r::utils::validate_slice(&computed, x.len(), "reference gradient")?;
             g.copy_from_slice(&computed);
         }
@@ -47,6 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut seeds = 0u64..30;
     let mut algorithms = vec!["nlopt-lbfgs".to_string(), "nlopt4r-lbfgs".to_string()];
     let mut output = None;
+    let mut shift = false;
+    let mut rotate = false;
+    let mut instance_seed = 0u64;
     let mut args = std::env::args().skip(1);
     while let Some(option) = args.next() {
         let value = args
@@ -62,6 +73,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--algorithms" => algorithms = value.split(',').map(str::to_string).collect(),
             "--output" => output = Some(value),
+            "--shift" | "--rotate" => {
+                let enabled = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(format!("{option} must be on or off").into()),
+                };
+                if option == "--shift" {
+                    shift = enabled;
+                } else {
+                    rotate = enabled;
+                }
+            }
+            "--instance-seed" => instance_seed = value.parse()?,
             _ => return Err(format!("unknown option or suite: {option} {value}").into()),
         }
     }
@@ -119,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n = problem.dimension(dimension)?;
         let bounds = Bounds::uniform(n, problem.bounds.0, problem.bounds.1)?;
         let target = problem.reference(n).1 + 1e-6;
+        let transformation = Transformation::new(problem, n, shift, rotate, instance_seed)?;
         for seed in seeds.clone() {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             let mut initial = vec![0.0; n];
@@ -126,6 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for algorithm in &algorithms {
                 let measured = Measured {
                     problem,
+                    transformation: transformation.as_ref(),
                     target,
                     started: Instant::now(),
                     calls: Cell::new(0),
@@ -194,7 +220,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     errors += 1;
                 }
                 let hit = measured.hit.get();
-                let row = json!({"schema":"nlopt4r-native-v1","problem":id,"algorithm":algorithm,
+                let row = json!({"schema":"nlopt4r-native-v2","problem":id,"algorithm":algorithm,
+                    "transformation":transformation,
                     "dimension":n,"seed":seed,"budget":limit,"target":target,
                     "domain":"unbounded; identical seeded box initialization",
                     "objective_evaluations":measured.calls.get(),"gradient_evaluations":measured.gradients.get(),
