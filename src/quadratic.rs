@@ -1,5 +1,24 @@
 //! Convex dense quadratic programming with a feasible active set and phase I.
 //! All inequalities use A_i x >= b_i; multipliers use L = f - lambda' (Ax-b).
+//!
+//! Minimize `x'Hx/2 + c'x` with `Ae*x=be`, `Ai*x>=bi` and a symmetric
+//! positive-semidefinite `H`. Positive-definite well-scaled models are preferred.
+//! An active set handles inequalities; phase I permits infeasible initial points.
+//! Redundant consistent constraints use a checked least-norm KKT fallback.
+//! This is not a general LP/unboundedness-certification solver.
+//!
+//! ```
+//! use nlopt4r::{Matrix, Vector, StopOptions, quadratic::{QuadraticProgram, minimize}};
+//! let mut qp = QuadraticProgram::unconstrained(
+//!     Matrix::identity(2, 2), Vector::from_vec(vec![-2.0, -4.0]),
+//! );
+//! qp.equalities = Matrix::from_row_slice(1, 2, &[1.0, 1.0]);
+//! qp.equality_rhs = Vector::from_vec(vec![3.0]);
+//! let result = minimize(&qp, &Vector::zeros(2), &StopOptions::default())?;
+//! assert!(result.solution.converged());
+//! assert!((result.solution.x.sum()-3.0).abs() < 1e-6);
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
 use crate::{
     Error, Matrix, Solution, Status, StopOptions, TerminationReason, Vector, finite, matrix,
     solution,
@@ -7,20 +26,35 @@ use crate::{
     symmetric, vector,
 };
 
+/// Dense convex QP data, validated on solver entry rather than construction.
+///
+/// All arrays must be finite. For `n` variables, absent constraint matrices must
+/// have shape `0 x n`, not `0 x 0`. No bounds are implied unless supplied as rows.
 pub struct QuadraticProgram {
+    /// Symmetric positive-semidefinite `n x n` matrix H in `x'Hx/2`.
     pub hessian: Matrix,
+    /// Length-n linear coefficient c.
     pub linear: Vector,
+    /// Equality rows Ae, shape `equality_rhs.len() x n`.
     pub equalities: Matrix,
+    /// Equality right-hand side be.
     pub equality_rhs: Vector,
+    /// Inequality rows Ai, shape `inequality_rhs.len() x n`, using `Ai*x>=bi`.
     pub inequalities: Matrix,
+    /// Inequality right-hand side bi.
     pub inequality_rhs: Vector,
 }
 
+/// QP state and canonical equality/inequality multipliers.
 #[derive(Debug, Clone)]
 pub struct QuadraticSolution {
+    /// Iterate/value/stationarity report; inspect convergence before use.
     pub solution: Solution,
+    /// Equality multipliers in `L=f-mu'(Ae*x-be)-lambda'(Ai*x-bi)`.
     pub equality_multipliers: Vector,
+    /// Nonnegative active inequality multipliers; inactive rows have zero multiplier.
     pub inequality_multipliers: Vector,
+    /// Maximum equality residual or negative-part inequality residual.
     pub constraint_violation: f64,
 }
 impl Report for QuadraticSolution {
@@ -33,6 +67,8 @@ impl Report for QuadraticSolution {
 }
 
 impl QuadraticProgram {
+    /// Create a model with empty constraint arrays inferred from `linear.len()`.
+    /// Dimensions/finiteness/convexity are checked later by the solver.
     pub fn unconstrained(hessian: Matrix, linear: Vector) -> Self {
         let n = linear.len();
         Self {
@@ -98,6 +134,11 @@ fn least_norm(a: &Matrix, b: &Vector) -> Result<Vector, Error> {
 
 /// Solve an equality-constrained quadratic KKT system, including consistent
 /// rank-deficient systems. An unbounded/unsolvable system returns an error.
+///
+/// Solves `min x'Hx/2+c'x` subject to `a*x=b`; `H` must be symmetric PSD.
+/// The returned equality multipliers satisfy `H*x+c-a'*mu=0`. This direct
+/// operation has no iterative objective allowance and reports one model state.
+/// Inconsistent constraints or an unacceptable solve return explicit errors.
 pub fn equality_constrained(
     hessian: &Matrix,
     linear: &Vector,
@@ -311,7 +352,13 @@ fn active_set(
 }
 
 /// Solve a convex QP. The initial point need not be feasible; phase I first
-/// finds feasibility. Phase I and optimization each have the supplied budget.
+/// finds feasibility. Each phase has its own `max_iterations` allowance, but
+/// both share the strict `max_evaluations` limit.
+///
+/// Input data and `x0` must have the same nonzero variable dimension. Counts
+/// describe checked model states, not external callbacks. Outer budget stops
+/// return a non-converged original-dimension checkpoint; failed phase-I or KKT
+/// solves remain errors. The returned iteration count covers the main solve.
 pub fn minimize(
     qp: &QuadraticProgram,
     x0: &Vector,

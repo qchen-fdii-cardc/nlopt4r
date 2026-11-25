@@ -1,25 +1,49 @@
+//! Legacy smooth local methods, reexported at the crate root and in [`crate::local`].
 use crate::{
     Error, Evaluator, Matrix, Options, Solution, TerminationReason, Vector, finite, initial,
     line_search, solve,
     stopping::{Run, snapshot},
 };
 
+/// Smooth unconstrained method used by [`minimize`].
+///
+/// Gradient/CG methods use vector-sized workspace; quasi-Newton methods store
+/// a dense inverse approximation. Newton methods additionally require an analytic
+/// Hessian. For scalable alternatives see [`crate::local`].
 #[derive(Debug, Clone, Copy)]
 pub enum Method {
+    /// Steepest descent `d=-gradient`.
     SteepestDescent,
+    /// Unit-length negative-gradient direction.
     NormalizedGradient,
+    /// Nonlinear conjugate gradients with periodic restart and descent safeguards.
     FletcherReeves,
+    /// Dense Newton equation plus Armijo damping and a non-descent safeguard.
     DampedNewton,
+    /// Dense Newton with a positive-definite shifted Hessian.
     ModifiedNewton,
+    /// Dense inverse BFGS with guarded curvature updates.
     Bfgs,
+    /// Dense Davidon-Fletcher-Powell inverse update.
     Dfp,
+    /// Dense symmetric-rank-one inverse update with denominator safeguards.
     Sr1,
     /// Convex Broyden inverse-Hessian family: 0 is DFP, 1 is BFGS.
     Broyden {
+        /// Finite interpolation weight in `[0,1]`.
         phi: f64,
     },
 }
 
+/// Minimize a smooth unconstrained objective from a finite nonempty initial point.
+///
+/// Every method requires an analytic gradient; dense Newton variants also need a
+/// symmetric Hessian. All use [`crate::line_search::armijo`] settings. Domains and
+/// bounds are not enforced: the callback must be defined at every trial.
+///
+/// Normal budget/stagnation stops return a [`Solution`] that may not converge.
+/// Invalid options, callbacks and failed searches return explicit errors, with
+/// [`Error::last_solution`] after a fully evaluated checkpoint.
 pub fn minimize<P: Evaluator + ?Sized>(
     problem: &P,
     x0: &Vector<f64>,

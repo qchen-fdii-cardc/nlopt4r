@@ -2,6 +2,21 @@
 //!
 //! Matrix-free alternatives are provided separately; the dense spectral solver
 //! and its hard-case behavior below are unchanged.
+//!
+//! [`minimize`] needs an analytic gradient and dense symmetric Hessian.
+//! [`subproblem`] solves `min g'd + d'B*d/2`, `||d||<=radius`, spectrally,
+//! including indefinite matrices and the zero-gradient hard case.
+//! Dense storage is O(n^2), eigenanalysis O(n^3); use [`trust_region_cg`] for
+//! a matrix-free approximate alternative.
+//!
+//! ```
+//! use nlopt4r::{Matrix, Vector, trust_region::subproblem};
+//! let g = Vector::from_vec(vec![2.0, 0.0]);
+//! let step = subproblem(&g, &Matrix::identity(2, 2), 1.0)?;
+//! assert!((step.step.norm()-1.0).abs() < 1e-8);
+//! assert!(step.value < 0.0);
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
 pub use crate::local::{
     SteihaugOptions, SteihaugStep, SteihaugTermination, TrustRegionCgOptions, steihaug,
     trust_region_cg,
@@ -13,11 +28,16 @@ use crate::{
     symmetric, vector,
 };
 
+/// Dense trust-region outer stopping and radius controls.
 #[derive(Debug, Clone)]
 pub struct TrustRegionOptions {
+    /// Shared gradient/budget/stagnation controls; no Armijo settings are required.
     pub stopping: StopOptions,
+    /// Positive finite starting radius, default 1.
     pub initial_radius: f64,
+    /// Positive finite ceiling, at least the initial radius; default 2.
     pub maximum_radius: f64,
+    /// Actual/predicted reduction threshold in `[0,0.75)`, default 0.15.
     pub acceptance_threshold: f64,
 }
 
@@ -32,15 +52,24 @@ impl Default for TrustRegionOptions {
     }
 }
 
+/// Spectral quadratic-model solution and its trust-radius multiplier.
 #[derive(Debug, Clone)]
 pub struct TrustRegionStep {
+    /// Model displacement with norm at most the supplied radius.
     pub step: Vector,
+    /// Model change `g'd+d'B*d/2`, not the nonlinear objective.
     pub value: f64,
+    /// Nonnegative lambda satisfying `(B+lambda*I)d=-g` within numerical accuracy.
     pub multiplier: f64,
 }
 
 /// Globally solve min g'd + d'Bd/2 subject to ||d|| <= radius.
 /// Handles indefinite B and the zero-gradient "hard case".
+///
+/// `g` must be finite and nonempty, `b` finite symmetric with matching dimension,
+/// and `radius` positive finite. Does not call an objective or enforce a budget.
+/// This global quadratic-subproblem solution is not a certificate for a
+/// nonconvex nonlinear outer objective.
 pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep, Error> {
     positive(radius, "trust radius")?;
     if g.is_empty() {
@@ -102,6 +131,13 @@ pub fn subproblem(g: &Vector, b: &Matrix, radius: f64) -> Result<TrustRegionStep
     })
 }
 
+/// Minimize a smooth unbounded objective using dense spectral trust-region steps.
+///
+/// Requires a finite nonempty `x0` and analytic gradient/Hessian. Radius adapts
+/// from actual/predicted reduction. Rejected trials consume objective budget
+/// but do not count as accepted-step stagnation. Normal limits return a report;
+/// missing Hessians, bad callbacks and failed numerical models are explicit errors
+/// with a fully evaluated local checkpoint when available.
 pub fn minimize<P: Evaluator + ?Sized>(
     problem: &P,
     x0: &Vector,

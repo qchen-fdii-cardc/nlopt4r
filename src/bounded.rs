@@ -1,4 +1,23 @@
 //! Feasible projected-gradient descent for finite coordinate bounds.
+//!
+//! The unit-step mapping `G(x)=x-project(x-gradient)` vanishes at first-order
+//! box stationarity even when the unconstrained gradient does not. Every trial
+//! remains feasible; the initial finite point is projected before evaluation.
+//! This is a first-order local method, not full L-BFGS-B.
+//!
+//! ```
+//! use nlopt4r::{Bounds, Options, Vector, bounded::projected_gradient};
+//! let problem = (
+//!     |x: &Vector| (x[0]-3.0).powi(2),
+//!     |x: &Vector| Vector::from_vec(vec![2.0*(x[0]-3.0)]),
+//! );
+//! let result = projected_gradient(
+//!     &problem, &Vector::zeros(1), &Bounds::uniform(1, -1.0, 1.0)?, &Options::default(),
+//! )?;
+//! assert!(result.converged());
+//! assert!((result.x[0]-1.0).abs() < 1e-6); // Active-bound optimum.
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
 use crate::{
     Bounds, Error, Evaluator, Options, Solution, TerminationReason, Vector, initial, line_search,
     stopping::{Run, snapshot},
@@ -6,6 +25,7 @@ use crate::{
 
 /// Euclidean norm of the unit-step gradient mapping `x - P(x-gradient)`.
 /// It is zero exactly at first-order box stationarity, including fixed variables.
+/// Requires a finite dimension-correct gradient and an already in-bounds point.
 pub fn projected_gradient_norm(
     x: &Vector,
     gradient: &Vector,
@@ -32,6 +52,11 @@ fn projected_point(x: &Vector, gradient: &Vector, bounds: &Bounds) -> Result<Vec
 /// Every callback receives a point in the box. `Solution::gradient_norm` is
 /// the unit-step gradient mapping norm, not the unconstrained gradient norm.
 /// This is projected gradient, not L-BFGS-B.
+///
+/// Uses the gradient tolerance from [`Options::stopping`] and Armijo parameters
+/// from [`Options::line_search`]. Accepted value/gradient pairs are reused.
+/// Budget/stagnation reports are not certified minima. Shape, callback and
+/// numerical errors retain the last fully evaluated bounded checkpoint.
 pub fn projected_gradient<P: Evaluator + ?Sized>(
     problem: &P,
     x0: &Vector,

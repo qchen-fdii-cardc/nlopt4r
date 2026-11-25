@@ -1,4 +1,31 @@
 //! Truncated Newton-CG using application-supplied Hessian-vector products.
+//!
+//! Solve Newton equations approximately without constructing a dense Hessian.
+//! CG truncates on nonpositive curvature and the outer search safeguards descent.
+//! No preconditioner is currently supported.
+//!
+//! ```
+//! use nlopt4r::{Error, Evaluator, Vector,
+//!     local::{HessianVector, NewtonCgOptions, newton_cg}};
+//! struct Sphere;
+//! impl Evaluator for Sphere {
+//!     fn evaluate(&self, x: &[f64], gradient: Option<&mut [f64]>) -> Result<f64, Error> {
+//!         if let Some(g) = gradient {
+//!             for (out, &v) in g.iter_mut().zip(x) { *out = 2.0 * v; }
+//!         }
+//!         Ok(x.iter().map(|v| v*v).sum())
+//!     }
+//! }
+//! impl HessianVector for Sphere {
+//!     fn hessian_vector(&self, _: &[f64], v: &[f64], out: &mut [f64]) -> Result<(), Error> {
+//!         for (out, &v) in out.iter_mut().zip(v) { *out = 2.0 * v; }
+//!         Ok(())
+//!     }
+//! }
+//! let result = newton_cg(&Sphere, &Vector::from_element(10, 1.0), &NewtonCgOptions::default())?;
+//! assert!(result.converged());
+//! # Ok::<(), Error>(())
+//! ```
 use crate::{
     Error, Evaluator, Solution, StopOptions, TerminationReason, Vector, finite, initial, positive,
     stopping::{Run, snapshot},
@@ -13,6 +40,8 @@ use super::{StrongWolfeOptions, strong_wolfe};
 /// No dense Hessian is requested. Each product, including a failed callback, is
 /// reported in `Solution.evaluations.hessian`; objective budgets exclude products.
 pub trait HessianVector: Evaluator {
+    /// Overwrite all `n` entries with the finite product `H(x)*v`, or return an error.
+    /// At each fixed `x`, the product must be linear in `v` and symmetric.
     fn hessian_vector(&self, x: &[f64], v: &[f64], product: &mut [f64]) -> Result<(), Error>;
 }
 
@@ -30,12 +59,17 @@ pub(crate) fn product<P: HessianVector + ?Sized>(
     Ok(result)
 }
 
+/// Outer strong-Wolfe minimization and truncated inner CG controls.
 #[derive(Debug, Clone)]
 pub struct NewtonCgOptions {
+    /// Objective/outer-iteration allowances and gradient/stagnation tests.
     pub stopping: StopOptions,
+    /// Shared bracketing/zoom search parameters.
     pub line_search: StrongWolfeOptions,
+    /// Positive inner iteration cap, default 100; effective cap also cannot exceed `n`.
     pub max_cg_iterations: usize,
     /// Relative residual threshold for the inner Newton equation.
+    /// Finite in `(0,1)`, default 0.1; tighter values require more Hessian products.
     pub cg_tolerance: f64,
 }
 
@@ -51,6 +85,7 @@ impl Default for NewtonCgOptions {
 }
 
 impl NewtonCgOptions {
+    /// Validate stopping, Wolfe and positive inner CG settings.
     pub fn validate(&self) -> Result<(), Error> {
         self.stopping.validate()?;
         self.line_search.validate()?;
@@ -92,6 +127,14 @@ where
     Ok(p)
 }
 
+/// Minimize a smooth unbounded objective using truncated Newton-CG and strong Wolfe.
+///
+/// `x0` must be finite and nonempty. Requires [`Evaluator`] and [`HessianVector`],
+/// never a dense Hessian. Uses O(n) working vectors, reuses accepted values/
+/// gradients, and charges Hessian products separately from the strict objective
+/// allowance. An inner residual/curvature/cap stop supplies an approximate
+/// direction; outer convergence still requires the gradient tolerance.
+/// Failed callbacks/searches retain the last fully evaluated local checkpoint.
 pub fn newton_cg<P: HessianVector + ?Sized>(
     problem: &P,
     x0: &Vector,

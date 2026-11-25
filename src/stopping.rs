@@ -3,13 +3,21 @@ use crate::{
     vector,
 };
 
+/// Mixed tolerance: `difference <= absolute + relative * scale`.
+///
+/// Both terms must be finite and nonnegative, and at least one must be positive.
+/// Local stagnation tests use the maximum of consecutive point norms or absolute
+/// objective values as `scale`; scalar search uses its interval-specific scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerance {
+    /// Absolute allowance in the units of the measured quantity.
     pub absolute: f64,
+    /// Dimensionless allowance multiplied by the solver's scale.
     pub relative: f64,
 }
 
 impl Tolerance {
+    /// Construct an absolute-only tolerance. Validation occurs when a solver uses it.
     pub fn absolute(value: f64) -> Self {
         Self {
             absolute: value,
@@ -34,14 +42,22 @@ impl Tolerance {
     }
 }
 
+/// Common controls for local gradient/KKT solvers.
+///
+/// Defaults: 5000 outer iterations, no objective cap, gradient tolerance 1e-6,
+/// no stagnation tests. Gradient and feasibility criteria are solver-specific;
+/// see [`crate::Solution::gradient_norm`]. A zero iteration limit is allowed.
 #[derive(Debug, Clone)]
 pub struct StopOptions {
+    /// Outer iteration limit; zero still permits initial evaluation/convergence.
     pub max_iterations: usize,
     /// Maximum objective evaluations, including line-search trials and failed callbacks.
     pub max_evaluations: Option<usize>,
+    /// Positive finite absolute stationarity threshold; default 1e-6.
     pub gradient_tolerance: f64,
     /// Optional stagnation tests; neither certifies optimality.
     pub value_tolerance: Option<Tolerance>,
+    /// Optional accepted-point displacement test; reports stagnation, not convergence.
     pub step_tolerance: Option<Tolerance>,
 }
 impl Default for StopOptions {
@@ -56,6 +72,7 @@ impl Default for StopOptions {
     }
 }
 impl StopOptions {
+    /// Reject invalid tolerances or `Some(0)` objective budgets before callback evaluation.
     pub fn validate(&self) -> Result<(), Error> {
         positive(self.gradient_tolerance, "gradient tolerance")?;
         if self.max_evaluations == Some(0) {
@@ -71,25 +88,46 @@ impl StopOptions {
     }
 }
 
+/// Detailed reason for a local solver's returned status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminationReason {
+    /// Gradient or method-specific stationarity norm is sufficiently small.
     GradientTolerance,
+    /// Required stationarity, feasibility and complementarity conditions passed.
     KktTolerance,
+    /// Scalar search bracket satisfied its interval tolerance.
     IntervalTolerance,
+    /// Outer iteration limit exhausted.
     MaxIterations,
+    /// Objective budget exhausted.
     MaxEvaluations,
+    /// Enabled objective-change tolerance detected stagnation.
     ObjectiveStagnation,
+    /// Enabled accepted-step tolerance detected stagnation.
     StepStagnation,
+    /// Checkpoint belongs to a failed solver.
     Failed,
 }
 
+/// Attempted evaluation work, including failed callbacks and rejected trials.
+///
+/// A combined value/gradient request counts in both categories. Least squares
+/// charges residuals as objective calls and Jacobians as gradient calls.
+/// Constraint evaluation includes its Jacobians. QP counts represent model states.
+/// Only `objective` consumes [`StopOptions::max_evaluations`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct EvaluationCounts {
+    /// Objective calls, or residual/model-state evaluations in the relevant family.
     pub objective: usize,
+    /// Gradient requests; includes least-squares Jacobian requests.
     pub gradient: usize,
+    /// Dense Hessian or Hessian-vector requests.
     pub hessian: usize,
+    /// Nonlinear constraint evaluations or evaluated QP constraint states.
     pub constraints: usize,
+    /// Residual vector requests.
     pub residuals: usize,
+    /// Residual/constraint Jacobian requests.
     pub jacobian: usize,
     /// Evaluations of synthetic models, not charged to the outer objective budget.
     pub subproblem: usize,

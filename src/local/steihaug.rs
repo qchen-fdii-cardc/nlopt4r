@@ -1,4 +1,10 @@
 //! Truncated conjugate gradients for Euclidean trust regions.
+//!
+//! [`steihaug()`] solves a quadratic model approximately using symmetric
+//! Hessian-vector products. [`trust_region_cg`] embeds it in an unbounded local
+//! minimizer, adapting radius from actual/predicted reduction. Workspace is O(n).
+//! For the exact dense spectral hard case use [`crate::trust_region::subproblem`].
+//! Reference: Steihaug (1983), *The conjugate gradient method and trust regions*.
 use crate::{
     Error, Solution, StopOptions, TerminationReason, Vector, finite, initial, positive,
     stopping::{Run, snapshot},
@@ -7,10 +13,13 @@ use crate::{
 
 use super::{HessianVector, newton_cg::product};
 
+/// Inner truncated-CG residual and iteration controls.
 #[derive(Debug, Clone)]
 pub struct SteihaugOptions {
+    /// Positive CG cap, default 100; effective cap also cannot exceed dimension.
     pub max_iterations: usize,
     /// Relative residual threshold; the origin residual is the supplied gradient.
+    /// Finite in `(0,1)`, default 0.1.
     pub relative_tolerance: f64,
 }
 
@@ -24,6 +33,7 @@ impl Default for SteihaugOptions {
 }
 
 impl SteihaugOptions {
+    /// Check positive cap and a finite residual tolerance strictly between zero and one.
     pub fn validate(&self) -> Result<(), Error> {
         positive(self.relative_tolerance, "Steihaug residual tolerance")?;
         if self.relative_tolerance >= 1.0 || self.max_iterations == 0 {
@@ -33,21 +43,31 @@ impl SteihaugOptions {
     }
 }
 
+/// Why the approximate trust-model solve stopped; not an outer convergence claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteihaugTermination {
+    /// Residual norm is at most the configured fraction of the origin norm.
     ResidualTolerance,
+    /// Positive-curvature CG reached the Euclidean trust boundary.
     Boundary,
+    /// A nonpositive-curvature direction was followed to the better boundary endpoint.
     NegativeCurvature,
+    /// Effective CG cap reached; the returned step is still an approximate model step.
     MaxIterations,
 }
 
+/// Approximate trust-model step and its inner-work diagnostics.
 #[derive(Debug, Clone)]
 pub struct SteihaugStep {
+    /// Model displacement with norm at most the supplied radius.
     pub step: Vector,
     /// Quadratic model change g'p + p'Hp/2, not an objective evaluation.
     pub value: f64,
+    /// Consumed inner CG iterations.
     pub iterations: usize,
+    /// Calls to the supplied multiply callback; does not include objective work.
     pub hessian_products: usize,
+    /// Inner termination condition.
     pub termination: SteihaugTermination,
 }
 
@@ -175,12 +195,19 @@ where
     report(g, p, hp, limit, SteihaugTermination::MaxIterations)
 }
 
+/// Matrix-free trust-region minimizer settings, independent of line-search options.
 #[derive(Debug, Clone)]
 pub struct TrustRegionCgOptions {
+    /// Outer gradient, iteration, objective-budget and stagnation controls.
     pub stopping: StopOptions,
+    /// Approximate quadratic model solve.
     pub subproblem: SteihaugOptions,
+    /// Positive finite starting radius, default 1.
     pub initial_radius: f64,
+    /// Positive finite radius ceiling, at least the initial radius; default 100.
     pub maximum_radius: f64,
+    /// Accept when actual/predicted decrease exceeds this value in `[0,0.25)`;
+    /// default 0.1.
     pub acceptance_threshold: f64,
 }
 
@@ -197,6 +224,7 @@ impl Default for TrustRegionCgOptions {
 }
 
 impl TrustRegionCgOptions {
+    /// Validate stopping, subproblem, ordered radii and acceptance threshold.
     pub fn validate(&self) -> Result<(), Error> {
         self.stopping.validate()?;
         self.subproblem.validate()?;
@@ -211,6 +239,14 @@ impl TrustRegionCgOptions {
     }
 }
 
+/// Minimize using matrix-free Steihaug trust steps and actual/model reduction.
+///
+/// Requires a finite nonempty `x0`, analytic gradient and symmetric
+/// [`HessianVector`]. Rejected trials consume objective budget, not accepted-step
+/// stagnation progress. Hessian products are counted separately, and the last
+/// fully evaluated accepted state is retained on failure/budget interruption.
+/// Gradient convergence is only first-order stationarity; hidden negative
+/// eigenspaces at zero gradient are not explored.
 pub fn trust_region_cg<P: HessianVector + ?Sized>(
     problem: &P,
     x0: &Vector,

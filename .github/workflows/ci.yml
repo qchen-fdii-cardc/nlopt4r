@@ -28,7 +28,8 @@ jobs:
           rustup component add rustfmt clippy --toolchain stable
           cargo +stable fmt --all --check
           cargo +stable clippy -p nlopt4r -p nlopt4r-bench -p nlopt4r-extension-example --all-targets -- -D warnings
-          RUSTDOCFLAGS="-D warnings" cargo +stable doc -p nlopt4r -p nlopt4r-bench -p nlopt4r-extension-example --no-deps
+          RUSTDOCFLAGS="-D warnings -D missing_docs" cargo +stable doc -p nlopt4r --no-deps
+          RUSTDOCFLAGS="-D warnings" cargo +stable doc -p nlopt4r-bench -p nlopt4r-extension-example --no-deps
           cargo +stable test -p nlopt4r-bench
           cargo +stable run -p nlopt4r-extension-example
           CARGO_NET_OFFLINE=true cargo +stable bench --bench kernels -- --test

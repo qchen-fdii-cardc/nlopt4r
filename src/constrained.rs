@@ -1,5 +1,55 @@
 //! Nonlinear constraints h(x)=0, g(x)>=0, using L=f-mu'h-lambda'g.
 //! Jacobians have one row per constraint, unlike the transposed PHR MATLAB inputs.
+//!
+//! # Choose an entry point
+//! - [`sqp_with_restoration`]: gradient-based SQP with explicit constraint-only
+//!   repair of infeasible linearized QPs; recommended when restoration is needed.
+//! - [`minimize`] with [`Method::Sqp`]: legacy SQP; infeasible linearizations fail.
+//! - [`Method::NewtonLagrange`] / [`Method::LagrangeSqp`]: equality-only methods
+//!   requiring the analytic Hessian of the canonical Lagrangian.
+//! - [`augmented_lagrangian`]: PHR multiplier/penalty iterations with BFGS inner solves.
+//!
+//! Convergence requires stationarity, feasibility and complementarity together.
+//! Constraint counts must stay constant. For `n` variables and `m` constraints,
+//! each Jacobian is `m x n`; represent an absent constraint kind by a zero-length
+//! vector and `0 x n` matrix. Multipliers follow `L=f-mu'h-lambda'g`, `lambda>=0`.
+//! These are local KKT methods, not global or infeasibility-certification tools.
+//!
+//! # Example: equality-constrained quadratic objective
+//! ```
+//! use nlopt4r::{Matrix, Objective, Vector};
+//! use nlopt4r::constrained::{
+//!     ConstrainedProblem, Constraints, SqpOptions, sqp_with_restoration,
+//! };
+//! struct Model;
+//! impl Objective for Model {
+//!     fn value(&self, x: &Vector) -> f64 { (x[0]-1.0).powi(2)+(x[1]-2.0).powi(2) }
+//!     fn gradient(&self, x: &Vector) -> Vector {
+//!         Vector::from_vec(vec![2.0*(x[0]-1.0), 2.0*(x[1]-2.0)])
+//!     }
+//! }
+//! impl ConstrainedProblem for Model {
+//!     fn constraints(&self, x: &Vector) -> Constraints {
+//!         Constraints {
+//!             equalities: Vector::from_vec(vec![x[0]+x[1]-1.0]),
+//!             equality_jacobian: Matrix::from_row_slice(1, 2, &[1.0, 1.0]),
+//!             inequalities: Vector::zeros(0),
+//!             inequality_jacobian: Matrix::zeros(0, 2),
+//!         }
+//!     }
+//! }
+//! let mut options = SqpOptions::default();
+//! options.solver.solver.stopping.max_evaluations = Some(500);
+//! let result = sqp_with_restoration(&Model, &Vector::zeros(2), &options)?;
+//! assert!(result.constrained.solution.converged());
+//! assert!(result.constrained.constraint_violation < 1e-6);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Outer objective budgets include trials and PHR inner calls. Constraint/
+//! Jacobian work is counted separately. Restoration SQP additionally limits
+//! synthetic subproblem work and exposes full multiplier checkpoints on failure.
+//! References: Nocedal and Wright (2006); Powell (1969); Hestenes (1969).
 use crate::{
     Error, EvaluationError, Evaluator, Matrix, Options, Solution, StopOptions, TerminationReason,
     Vector, finite, initial, line_search, matrix, positive, quadratic, solution,
@@ -7,14 +57,21 @@ use crate::{
     symmetric, vector,
 };
 
+/// Constraint values and row-oriented analytic Jacobians at one point.
+/// Constructors check dimensions/finiteness; solvers also require invariant counts.
 pub struct Constraints {
+    /// Equality residuals `h(x)`, required to vanish.
     pub equalities: Vector,
+    /// Inequality values `g(x)`, required to be nonnegative.
     pub inequalities: Vector,
+    /// `equalities.len() x n` derivative matrix.
     pub equality_jacobian: Matrix,
+    /// `inequalities.len() x n` derivative matrix.
     pub inequality_jacobian: Matrix,
 }
 
 impl Constraints {
+    /// Represent no constraints, keeping zero-row Jacobians with `n` columns.
     pub fn empty(n: usize) -> Self {
         Self {
             equalities: Vector::zeros(0),
@@ -23,6 +80,8 @@ impl Constraints {
             inequality_jacobian: Matrix::zeros(0, n),
         }
     }
+    /// Construct finite equalities and a matching row count; variable dimension
+    /// is inferred from Jacobian columns. Inequalities are empty.
     pub fn equalities_only(values: Vector, jacobian: Matrix) -> Result<Self, Error> {
         matrix(
             &jacobian,
@@ -36,6 +95,7 @@ impl Constraints {
         c.equality_jacobian = jacobian;
         Ok(c)
     }
+    /// Construct finite `g(x)>=0` values and matching Jacobian rows; equalities are empty.
     pub fn inequalities_only(values: Vector, jacobian: Matrix) -> Result<Self, Error> {
         matrix(
             &jacobian,
@@ -105,15 +165,24 @@ impl Constraints {
     }
 }
 
+/// Smooth objective/gradient plus constraint values and analytic derivatives.
+///
+/// Implement [`crate::Objective`] for infallible objectives or [`Evaluator`]
+/// for buffered/fallible objectives. Override `try_*` hooks for fallible
+/// constraints/Hessians; their errors are surfaced rather than retried silently.
 pub trait ConstrainedProblem: Evaluator {
+    /// Return canonical constraint values/Jacobians at `x`.
     fn constraints(&self, x: &Vector) -> Constraints;
     /// Hessian of f-mu'h-lambda'g. Required by the two exact-Hessian methods.
+    /// Must be finite symmetric `n x n`; the default returns `None`.
     fn lagrangian_hessian(&self, _x: &Vector, _mu: &Vector, _lambda: &Vector) -> Option<Matrix> {
         None
     }
+    /// Fallible constraint hook; defaults to [`Self::constraints`].
     fn try_constraints(&self, x: &Vector) -> Result<Constraints, EvaluationError> {
         Ok(self.constraints(x))
     }
+    /// Fallible canonical Lagrangian Hessian; defaults to [`Self::lagrangian_hessian`].
     fn try_lagrangian_hessian(
         &self,
         x: &Vector,
@@ -124,12 +193,17 @@ pub trait ConstrainedProblem: Evaluator {
     }
 }
 
+/// Shared constrained stopping/merit options, including PHR-specific settings.
 #[derive(Debug, Clone)]
 pub struct ConstrainedOptions {
+    /// Outer stopping and Armijo search settings; stationarity uses gradient tolerance.
     pub solver: Options,
+    /// Positive finite feasibility/complementarity threshold, default 1e-6.
     pub feasibility_tolerance: f64,
     /// Per-outer-iteration budget for PHR's BFGS subproblem.
+    /// Positive, default 1000; irrelevant to SQP/exact-equality methods.
     pub max_inner_iterations: usize,
+    /// Positive finite initial PHR penalty, default 2; only validated by PHR.
     pub initial_penalty: f64,
 }
 
@@ -159,13 +233,20 @@ impl ConstrainedOptions {
     }
 }
 
+/// Local constrained state, canonical multipliers and independent KKT diagnostics.
 #[derive(Debug, Clone)]
 pub struct ConstrainedSolution {
+    /// Objective/iterate report; gradient norm is Lagrangian stationarity.
     pub solution: Solution,
+    /// Equality multipliers `mu` in `L=f-mu'h-lambda'g`.
     pub equality_multipliers: Vector,
+    /// Nonnegative inequality multipliers `lambda` in the same convention.
     pub inequality_multipliers: Vector,
+    /// Maximum absolute equality or negative-part inequality violation.
     pub constraint_violation: f64,
+    /// Euclidean norm of componentwise `min(g,lambda)`.
     pub complementarity: f64,
+    /// Total PHR inner iterations; zero for methods without PHR inner minimization.
     pub inner_iterations: usize,
 }
 impl Report for ConstrainedSolution {
@@ -269,6 +350,7 @@ fn report(
     })
 }
 
+/// Local constrained method; exact-Hessian variants accept equalities only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     /// Powell-damped BFGS SQP with an l1 exact-penalty merit function.
@@ -280,17 +362,24 @@ pub enum Method {
 }
 
 /// Opt-in feasibility restoration; legacy `minimize` retains its behavior.
+/// Restore feasibility rather than silently substituting another objective solver.
 #[derive(Debug, Clone)]
 pub struct SqpOptions {
+    /// Outer options; objective allowance is `solver.solver.stopping.max_evaluations`.
     pub solver: ConstrainedOptions,
     /// Iteration cap for each QP phase (phase I and the objective active set).
     /// The whole-run synthetic evaluation cap also spans both phases.
+    /// Positive, default 1000.
     pub max_subproblem_iterations: usize,
     /// Total synthetic QP/restoration-model evaluations across the entire run.
+    /// Positive, default 10_000; separate from the outer objective cap.
     pub max_subproblem_evaluations: usize,
+    /// Positive iteration cap per restoration attempt, default 100.
     pub max_restoration_iterations: usize,
     /// Required fractional reduction in the squared constraint violation merit.
+    /// Finite in `(0,1)`, default 0.1.
     pub restoration_reduction: f64,
+    /// Positive finite regularization for restoration models, default 1e-3.
     pub restoration_damping: f64,
 }
 
@@ -307,27 +396,38 @@ impl Default for SqpOptions {
     }
 }
 
+/// Trace of one feasibility-repair attempt, retained on success and failure.
 #[derive(Debug, Clone)]
 pub struct RestorationEvent {
+    /// Outer SQP iteration at which repair was triggered.
     pub iteration: usize,
     /// Original infeasible QP error, including its synthetic checkpoint.
     pub trigger: Error,
+    /// Constraint-violation metric before repair.
     pub initial_violation: f64,
+    /// Last recorded constraint-violation metric after repair.
     pub final_violation: f64,
+    /// Consumed restoration iterations.
     pub iterations: usize,
     /// None means restoration reduced feasibility merit and SQP resumed.
     pub failure: Option<Error>,
 }
 
+/// SQP report and complete restoration-event history.
 #[derive(Debug, Clone)]
 pub struct SqpSolution {
+    /// Full constrained report; inspect its nested convergence flag.
     pub constrained: ConstrainedSolution,
+    /// Repair events in execution order.
     pub restoration: Vec<RestorationEvent>,
 }
 
+/// SQP failure with restoration history and optional full outer multiplier state.
 #[derive(Debug, Clone)]
 pub struct SqpError {
+    /// Solver error with ordinary recovery/source-chain information.
     pub source: Error,
+    /// Repair attempts, including a failed attempt if applicable.
     pub restoration: Vec<RestorationEvent>,
     /// Full outer checkpoint, including multipliers; absent before a valid state.
     pub last_constrained: Option<Box<ConstrainedSolution>>,
@@ -351,6 +451,12 @@ impl std::error::Error for SqpError {
 
 /// SQP with a separate constraint-only restoration phase when its linearized
 /// QP is infeasible. No other objective solver is substituted.
+///
+/// Requires finite nonempty `x0` and analytic gradient/constraint Jacobians.
+/// Repair only promises local merit reduction, not a feasibility certificate.
+/// Both successful and failed attempts are recorded. Ordinary outer limits
+/// return a non-converged report; unrecoverable QP/restoration/callback failures
+/// return [`SqpError`] with a full checkpoint when available.
 pub fn sqp_with_restoration<P: ConstrainedProblem + ?Sized>(
     p: &P,
     x0: &Vector,
@@ -403,6 +509,12 @@ pub fn sqp_with_restoration<P: ConstrainedProblem + ?Sized>(
     }
 }
 
+/// Run legacy SQP or an exact-Hessian equality method from a finite initial point.
+///
+/// SQP requires feasible linearized QPs; use [`sqp_with_restoration`] to opt into
+/// repair. Equality-only methods require `lagrangian_hessian` and reject inequalities.
+/// Convergence tests all KKT diagnostics. Errors expose an ordinary local
+/// checkpoint, but not the full multiplier recovery provided by [`SqpError`].
 pub fn minimize<P: ConstrainedProblem + ?Sized>(
     p: &P,
     x0: &Vector,
@@ -783,6 +895,13 @@ fn augmented(
 }
 
 /// Powell-Hestenes-Rockafellar multiplier method with BFGS inner minimization.
+///
+/// Uses the projected inequality penalty in the canonical `g>=0` convention,
+/// with `mu <- mu-rho*h`, `lambda <- max(0,lambda-rho*g)`.
+/// Inner objective calls share the strict outer budget. `initial_penalty` and
+/// `max_inner_iterations` must be positive; failed inner solves remain explicit
+/// errors with available checkpoints. Infeasible starts are allowed but no
+/// global feasibility/optimality guarantee is supplied.
 pub fn augmented_lagrangian<P: ConstrainedProblem + ?Sized>(
     p: &P,
     x0: &Vector,

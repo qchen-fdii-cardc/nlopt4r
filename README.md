@@ -25,6 +25,28 @@ the verified problem catalog, repeatable runs and failure-inclusive summaries.
 See the [measured baseline](docs/BENCHMARK_RESULTS.md) for 30-seed results,
 native comparisons, coverage and known limitations.
 
+## Generated API documentation
+
+```sh
+cargo doc -p nlopt4r --no-deps --open
+```
+
+Start on the crate landing page for solver selection, callback styles, stopping
+and recovery. Individual modules document mathematical conventions, valid input
+shapes, option defaults/ranges, diagnostics and limitations, with executable
+examples for local/global, bounded, least-squares, QP, constrained and custom
+evaluation workflows.
+
+Contributor checks:
+
+```sh
+RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc -p nlopt4r --no-deps
+cargo test -p nlopt4r --doc
+```
+
+These checks reject undocumented public items and broken API links, and compile
+and run the examples. Numerical behavior tests remain separate.
+
 ## Use from another Rust application or library
 
 Add a path dependency (adjust the path to your checkout):

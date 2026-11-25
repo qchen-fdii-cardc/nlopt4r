@@ -1,4 +1,29 @@
 //! Levenberg-Marquardt for square and rectangular residual systems.
+//!
+//! Minimize `f(x)=||r(x)||^2/2` with analytic Jacobian shape `m x n`.
+//! Residual count `m` must be positive and constant, and all outputs finite.
+//! A tuple `(residuals, jacobian)` implements [`LeastSquares`].
+//! Prefer [`levenberg_marquardt_with_options`] for adaptive column-scaled QR
+//! steps; [`levenberg_marquardt`] preserves the legacy normal-equation method.
+//!
+//! ```
+//! use nlopt4r::{Matrix, Vector, least_squares::{LmOptions, levenberg_marquardt_with_options}};
+//! let problem = (
+//!     |x: &Vector| Vector::from_vec(vec![x[0]-1.0, 2.0*x[0]-2.0]),
+//!     |_: &Vector| Matrix::from_column_slice(2, 1, &[1.0, 2.0]),
+//! );
+//! let result = levenberg_marquardt_with_options(
+//!     &problem, &Vector::zeros(1), &LmOptions::default(),
+//! )?;
+//! assert!(result.converged());
+//! assert!((result.x[0]-1.0).abs() < 1e-6);
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
+//!
+//! Residual evaluations (including rejected/failed trials) consume objective
+//! budget. Jacobian calls count separately as Jacobian and gradient work.
+//! Small stationarity does not imply zero residual or a globally best fit.
+//! References: Levenberg (1944), Marquardt (1963).
 use crate::{
     Error, EvaluationError, Matrix, Options, Solution, StopOptions, TerminationReason, Vector,
     initial, line_search, matrix, solve,
@@ -6,13 +31,18 @@ use crate::{
     vector,
 };
 
+/// Residual model with a row-oriented analytic Jacobian.
+/// Override `try_*` methods for fallible application evaluation.
 pub trait LeastSquares {
+    /// Nonempty finite residual vector, with constant length throughout a solve.
     fn residuals(&self, x: &Vector) -> Vector;
     /// One row per residual, one column per variable.
     fn jacobian(&self, x: &Vector) -> Matrix;
+    /// Fallible residual hook; defaults to [`Self::residuals`].
     fn try_residuals(&self, x: &Vector) -> Result<Vector, EvaluationError> {
         Ok(self.residuals(x))
     }
+    /// Fallible Jacobian hook; defaults to [`Self::jacobian`].
     fn try_jacobian(&self, x: &Vector) -> Result<Matrix, EvaluationError> {
         Ok(self.jacobian(x))
     }
@@ -33,6 +63,10 @@ where
 
 /// Minimize half the squared residual norm. Convergence means J'r is small,
 /// not necessarily that the residual is zero.
+///
+/// Legacy damped normal-equation steps use Armijo backtracking from [`Options`].
+/// Shapes and callback failures are checked at every trial. For better numerical
+/// conditioning and adaptive damping use [`levenberg_marquardt_with_options`].
 pub fn levenberg_marquardt<P: LeastSquares + ?Sized>(
     problem: &P,
     x0: &Vector,
@@ -48,11 +82,17 @@ pub fn levenberg_marquardt<P: LeastSquares + ?Sized>(
 /// Adaptive LM in column-scaled coordinates, solved by rectangular QR.
 #[derive(Debug, Clone)]
 pub struct LmOptions {
+    /// Shared stopping; gradient tolerance applies to column-scaled stationarity.
     pub stopping: StopOptions,
+    /// Positive finite starting damping, default 1e-3; at least the minimum.
     pub initial_damping: f64,
+    /// Positive finite damping floor, default 1e-15.
     pub minimum_damping: f64,
+    /// Accept if actual/predicted reduction exceeds this finite value in `[0,1)`;
+    /// default 1e-4.
     pub acceptance_ratio: f64,
     /// Maximum rejected damped models at each accepted iterate.
+    /// Positive, default 40; exhaustion returns an explicit damping-trial error.
     pub max_damping_trials: usize,
 }
 
@@ -74,6 +114,12 @@ impl Default for LmOptions {
 /// nonzero column norms of J (zero columns use one). Residual calls,
 /// including rejected trials and failed callbacks, consume the evaluation
 /// budget; Jacobian calls are reported separately.
+///
+/// The augmented QR system solves in scaled coordinates with adaptive damping,
+/// supporting rectangular and rank-deficient Jacobians. Storage is dense,
+/// O((m+n)*n), not sparse/matrix-free. `x0` must be finite and nonempty.
+/// Callback, shape, QR/damping failures preserve the last fully evaluated report
+/// when one exists; an exhausted objective budget returns a non-converged checkpoint.
 pub fn levenberg_marquardt_with_options<P: LeastSquares + ?Sized>(
     problem: &P,
     x0: &Vector,

@@ -1,32 +1,84 @@
 //! Seeded, bounded, derivative-free population optimization.
+//!
+//! Choose [`differential_evolution`] for synchronous DE/rand/1/bin or
+//! [`particle_swarm`] for inertia-weight global-best PSO. Both require finite
+//! [`Bounds`], accept [`crate::value_only`] callbacks, and retain the best checked
+//! point if the budget ends during initialization or a partial generation.
+//! They use O(population * dimension) storage and never request derivatives.
+//!
+//! ```
+//! use nlopt4r::{Bounds, value_only, core::BudgetOptions,
+//!     global::{differential_evolution, DeOptions}};
+//! let problem = value_only(|x: &[f64]| Ok(x.iter().map(|v| v * v).sum()));
+//! let bounds = Bounds::uniform(2, -5.0, 5.0)?;
+//! let options = DeOptions {
+//!     seed: 42,
+//!     budget: BudgetOptions { max_evaluations: 2000, target_value: Some(1e-6) },
+//!     ..Default::default()
+//! };
+//! let result = differential_evolution(&problem, &bounds, &options)?;
+//! assert!(bounds.contains(result.x.as_slice()));
+//! assert!(result.evaluations.objective <= 2000);
+//! // A missed target is a normal report, not a certified optimum.
+//! println!("best={}, stop={:?}", result.value, result.termination_reason);
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
+//!
+//! A seed resets the ChaCha8 stream per run, but is not a promise of bitwise
+//! cross-platform floating-point reproducibility. No nonlinear constraints,
+//! parallel evaluation, adaptive strategies or automatic local polishing are
+//! supplied. Restarts and parameter sensitivity matter on difficult landscapes.
+//! Primary references: Storn and Price (1997), *Differential Evolution*;
+//! Kennedy and Eberhart (1995), *Particle swarm optimization*.
 use crate::core::{BudgetOptions, EvaluationContext, Observer, SearchTermination};
 use crate::utils::{ChaCha8Rng, Rng, SeedableRng};
 use crate::{Bounds, Error, EvaluationCounts, Evaluator, Vector};
 
+/// Best-ever checked point, search outcome and population diagnostics.
 #[derive(Debug, Clone)]
 pub struct GlobalSolution {
+    /// Lowest-value evaluated position, including partial-generation improvements.
     pub x: Vector,
+    /// Finite objective at `x`.
     pub value: f64,
+    /// Completed generations; initialization and an unfinished generation do not count.
     pub generations: usize,
+    /// Attempted callback work, including initialization.
     pub evaluations: EvaluationCounts,
+    /// Target, cancellation or limit stop; none certifies global optimality.
     pub termination_reason: SearchTermination,
+    /// Run's RNG seed.
     pub seed: u64,
     /// Maximum coordinate spread divided by its domain width.
     pub diversity: f64,
 }
 impl GlobalSolution {
+    /// Whether the requested objective target was reached; not a convergence theorem.
     pub fn target_reached(&self) -> bool {
         self.termination_reason == SearchTermination::TargetReached
     }
 }
+/// Synchronous DE/rand/1/bin configuration.
+///
+/// Mutation uses `a + F*(b-c)` with distinct donors excluding the target.
+/// Binomial crossover forces one donor coordinate; selection accepts ties.
+/// All donors read the preceding generation.
 #[derive(Debug, Clone)]
 pub struct DeOptions {
+    /// Shared strict budget and optional target.
     pub budget: BudgetOptions,
+    /// ChaCha8 seed, default 0.
     pub seed: u64,
+    /// Number of candidates; at least 4, default 40.
     pub population_size: usize,
+    /// Completed-generation allowance, default 1000; zero still evaluates initialization.
     pub max_generations: usize,
+    /// Differential weight F, finite in `(0,2]`, default 0.8.
     pub weight: f64,
+    /// Crossover probability CR in `[0,1]`, default 0.9; one coordinate is forced even at zero.
     pub crossover: f64,
+    /// Optional exact-size population of finite in-bounds vectors.
+    /// `None` uses uniform sampling; invalid populations fail before objective calls.
     pub initial_population: Option<Vec<Vector>>,
 }
 impl Default for DeOptions {
@@ -42,16 +94,30 @@ impl Default for DeOptions {
         }
     }
 }
+/// Synchronous inertia-weight global-best PSO configuration.
+///
+/// Velocities start at zero. Each generation snapshots global best; independent
+/// coordinate-wise draws multiply cognitive/social terms. Personal bests update
+/// only on strict improvement. Projected coordinates have their velocity reset.
 #[derive(Debug, Clone)]
 pub struct PsoOptions {
+    /// Shared strict budget and optional target.
     pub budget: BudgetOptions,
+    /// ChaCha8 seed, default 0.
     pub seed: u64,
+    /// Number of particles; at least 2, default 40.
     pub population_size: usize,
+    /// Completed-generation allowance, default 1000; initialization is separate.
     pub max_generations: usize,
+    /// Inertia coefficient, finite in `[0,1)`, default 0.7.
     pub inertia: f64,
+    /// Nonnegative finite personal-best attraction, default 1.5.
     pub cognitive: f64,
+    /// Nonnegative finite global-best attraction, default 1.5.
     pub social: f64,
+    /// Velocity cap as a fraction of each bound width, finite in `(0,1]`, default 0.2.
     pub velocity_limit: f64,
+    /// Optional exact-size, finite in-bounds starting positions; `None` samples uniformly.
     pub initial_population: Option<Vec<Vector>>,
 }
 impl Default for PsoOptions {
@@ -155,6 +221,12 @@ fn initialize<P: Evaluator + ?Sized>(
     Ok(values)
 }
 /// DE/rand/1/bin with synchronous generations and midpoint boundary repair.
+///
+/// Bounds and population dimensions must match; objective callbacks must be finite.
+/// Mutation overflow and callback errors return [`Error`] with a best-point
+/// checkpoint when available. Budget/target/generation stops return a normal
+/// [`GlobalSolution`]. Midpoint repair moves a violated donor toward the target
+/// and the relevant bound; it is not arbitrary objective-domain rejection.
 pub fn differential_evolution<P: Evaluator + ?Sized>(
     p: &P,
     bounds: &Bounds,
@@ -163,6 +235,25 @@ pub fn differential_evolution<P: Evaluator + ?Sized>(
     differential_evolution_with_observer(p, bounds, options, None)
 }
 
+/// DE with an optional observer after every valid evaluation, including initialization.
+///
+/// [`crate::core::Control::Stop`] cancels without another call; observer errors
+/// propagate with the best valid point. `None` is identical to [`differential_evolution`].
+///
+/// ```
+/// use nlopt4r::{Bounds, value_only, core::{Control, EvaluationEvent, SearchTermination},
+///     global::{DeOptions, differential_evolution_with_observer}};
+/// let problem = value_only(|x: &[f64]| Ok(x[0]*x[0]));
+/// let mut observer = |event: &EvaluationEvent<'_>| {
+///     Ok(if event.evaluations.objective >= 5 { Control::Stop } else { Control::Continue })
+/// };
+/// let result = differential_evolution_with_observer(
+///     &problem, &Bounds::uniform(1, -1.0, 1.0)?, &DeOptions::default(), Some(&mut observer),
+/// )?;
+/// assert_eq!(result.termination_reason, SearchTermination::Cancelled);
+/// assert_eq!(result.evaluations.objective, 5);
+/// # Ok::<(), nlopt4r::Error>(())
+/// ```
 pub fn differential_evolution_with_observer<'a, P: Evaluator + ?Sized>(
     p: &'a P,
     bounds: &Bounds,
@@ -278,6 +369,12 @@ fn donors(rng: &mut ChaCha8Rng, size: usize, target: usize) -> [usize; 3] {
 }
 /// Inertia-weight, synchronous global-best PSO. Search success is not a
 /// certificate of global optimality.
+///
+/// Uses `v = inertia*v + cognitive*r1*(pbest-x) + social*r2*(gbest-x)`,
+/// then clips velocities by bound width, projects positions and resets velocity
+/// on boundary-projected coordinates. Returns the best evaluated position, not
+/// the final swarm centroid. Invalid options, non-finite arithmetic and callbacks
+/// are explicit errors.
 pub fn particle_swarm<P: Evaluator + ?Sized>(
     p: &P,
     bounds: &Bounds,
@@ -286,6 +383,7 @@ pub fn particle_swarm<P: Evaluator + ?Sized>(
     particle_swarm_with_observer(p, bounds, options, None)
 }
 
+/// PSO with a fallible per-evaluation observer; see [`differential_evolution_with_observer`].
 pub fn particle_swarm_with_observer<'a, P: Evaluator + ?Sized>(
     p: &'a P,
     bounds: &Bounds,

@@ -1,13 +1,23 @@
 //! Bracketing and safeguarded bisection for the strong Wolfe conditions.
+//!
+//! Armijo decrease is `f(x+a*d) <= f(x)+c1*a*g'd`; strong curvature requires
+//! `|g(x+a*d)'d| <= c2*|g'd|`. These conditions support safe quasi-Newton updates.
+//! [`strong_wolfe`] accepts a callback so external solvers can own accounting.
 use crate::{Error, Vector, finite, positive, vector};
 
+/// Strong-Wolfe parameters shared by bracketing and zoom.
 #[derive(Debug, Clone)]
 pub struct StrongWolfeOptions {
+    /// Armijo c1, default 1e-4; must satisfy `0 < c1 < c2 < 1`.
     pub sufficient_decrease: f64,
+    /// Strong-curvature c2, default 0.9.
     pub curvature: f64,
+    /// Positive finite starting trial length, default 1.
     pub initial_step: f64,
+    /// Positive finite expansion cap, at least `initial_step`; default 1e20.
     pub maximum_step: f64,
     /// Total trial callbacks, shared by bracketing and zoom.
+    /// Positive, default 80; excludes the supplied origin evaluation.
     pub max_evaluations: usize,
 }
 
@@ -24,6 +34,7 @@ impl Default for StrongWolfeOptions {
 }
 
 impl StrongWolfeOptions {
+    /// Validate coefficient order, step bounds and positive trial allowance.
     pub fn validate(&self) -> Result<(), Error> {
         if !(0.0 < self.sufficient_decrease
             && self.sufficient_decrease < self.curvature
@@ -41,10 +52,14 @@ impl StrongWolfeOptions {
     }
 }
 
+/// Accepted line-search state, available for reuse without re-evaluation.
 #[derive(Debug, Clone)]
 pub struct StrongWolfeStep {
+    /// Accepted positive step length.
     pub alpha: f64,
+    /// Objective at the accepted trial.
     pub value: f64,
+    /// Analytic gradient at that same trial.
     pub gradient: Vector,
     /// Number of combined value/gradient callbacks, excluding the supplied origin.
     pub evaluations: usize,
@@ -55,6 +70,12 @@ pub struct StrongWolfeStep {
 /// `evaluate(alpha)` must return the value and gradient at `x + alpha * direction`.
 /// The accepted gradient is returned for reuse, without another objective call.
 /// Callback failures propagate; neither budgets nor invalid trials are silently retried.
+///
+/// The supplied origin value, gradient and direction must be finite and
+/// dimension-consistent, with `gradient.dot(direction) < 0`. The callback owns
+/// objective budgets; this routine separately caps total trials. Search exhaustion
+/// or a bracket that cannot be refined at machine precision returns
+/// [`Error::LineSearchFailed`], not an unchecked candidate.
 pub fn strong_wolfe<F>(
     value: f64,
     gradient: &Vector,

@@ -1,12 +1,19 @@
 //! Buffered, fallible callbacks, with adapters for the original objective traits.
 use crate::{Error, Matrix, Objective, Vector, vector};
 
+/// Display-message wrapper for a fallible callback.
+///
+/// Use string conversions or [`Self::new`]. The original application's concrete
+/// error object is not retained; the optimizer exposes this wrapper in its error
+/// source chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationError {
+    /// Human-readable application failure.
     pub message: String,
 }
 
 impl EvaluationError {
+    /// Capture an application's display message without requiring ownership of its error type.
     pub fn new(error: impl std::fmt::Display) -> Self {
         Self {
             message: error.to_string(),
@@ -32,8 +39,17 @@ impl std::error::Error for EvaluationError {}
 
 /// Implement directly for application types, or use `Function` for closures.
 /// Fill every gradient entry when requested; no derivative is needed for value-only trials.
+///
+/// Outputs must be finite and shape-correct. Solvers validate them, but direct
+/// calls to an implementation do not add a budget or perform universal checks.
+/// Do not implement this alongside [`Objective`] on the same type: `Objective`
+/// already supplies a blanket adapter.
 pub trait Evaluator {
+    /// Return `f(x)` and, when supplied, overwrite the complete `n`-entry gradient buffer.
+    /// `None` means value only; return an explicit [`Error`] on application failure.
     fn evaluate(&self, x: &[f64], gradient: Option<&mut [f64]>) -> Result<f64, Error>;
+    /// Optional symmetric `n x n` analytic Hessian. Defaults to unavailable.
+    /// Dense Newton methods reject `None`; Hessian-vector solvers use a separate trait.
     fn evaluate_hessian(&self, _x: &[f64]) -> Result<Option<Matrix>, Error> {
         Ok(None)
     }
@@ -58,6 +74,9 @@ impl<P: Objective + ?Sized> Evaluator for P {
 type HessianCallback = fn(&[f64]) -> Result<Matrix, EvaluationError>;
 
 /// Wrap a fallible value-only callback. Gradient requests are explicit errors.
+///
+/// Useful for [`crate::global`] and [`crate::derivative_free`]. No finite
+/// differences or fabricated gradient entries are provided.
 pub fn value_only<F>(callback: F) -> ValueOnly<F>
 where
     F: Fn(&[f64]) -> Result<f64, EvaluationError>,
@@ -65,6 +84,7 @@ where
     ValueOnly(callback)
 }
 
+/// Derivative-free [`Evaluator`] created by [`value_only`].
 pub struct ValueOnly<F>(F);
 impl<F> Evaluator for ValueOnly<F>
 where
@@ -84,12 +104,19 @@ where
     }
 }
 
+/// Borrowing closure adapter for buffered, fallible values/gradients and an optional Hessian.
+///
+/// Construct with [`Self::new`]; attach a dense Hessian with [`Self::with_hessian`].
+/// Callback errors become [`Error::Evaluation`]. Gradient output is checked by
+/// solver entry points, so never leave entries unfilled.
 pub struct Function<F, H = HessianCallback> {
     callback: F,
     hessian: Option<H>,
 }
 
 impl<F> Function<F> {
+    /// Wrap `Fn(&[f64], Option<&mut [f64]>) -> Result<f64, EvaluationError>`.
+    /// The closure can capture borrowed data; a Hessian is initially unavailable.
     pub fn new(callback: F) -> Self {
         Self {
             callback,
@@ -98,6 +125,21 @@ impl<F> Function<F> {
     }
 }
 impl<F, H> Function<F, H> {
+    /// Attach `Fn(&[f64]) -> Result<Matrix, EvaluationError>` for dense Newton methods.
+    /// The returned matrix must be finite, square and symmetric.
+    ///
+    /// ```
+    /// use nlopt4r::{EvaluationError, Function, Matrix, Method, Options, Vector, minimize};
+    /// let problem = Function::new(|x: &[f64], gradient: Option<&mut [f64]>| {
+    ///     if let Some(g) = gradient { g[0] = 2.0*x[0]; }
+    ///     Ok::<_, EvaluationError>(x[0]*x[0])
+    /// }).with_hessian(|_: &[f64]| Ok(Matrix::from_element(1, 1, 2.0)));
+    /// let result = minimize(
+    ///     &problem, &Vector::from_element(1, 1.0), Method::DampedNewton, &Options::default(),
+    /// )?;
+    /// assert!(result.converged());
+    /// # Ok::<(), nlopt4r::Error>(())
+    /// ```
     pub fn with_hessian<J>(self, hessian: J) -> Function<F, J> {
         Function {
             callback: self.callback,

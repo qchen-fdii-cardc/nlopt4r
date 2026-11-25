@@ -1,4 +1,18 @@
 //! Armijo backtracking and bounded scalar minimization.
+//!
+//! [`armijo`] searches along a supplied descent direction and needs an analytic
+//! gradient at the origin. Scalar golden-section/Brent methods need only values
+//! but assume a continuous unimodal objective on a finite closed interval.
+//!
+//! ```
+//! use nlopt4r::line_search::{minimize_scalar_with_options, ScalarMethod, ScalarOptions};
+//! let result = minimize_scalar_with_options(
+//!     |x| (x-0.4).powi(2), (-1.0, 2.0), ScalarMethod::Parabolic, &ScalarOptions::default(),
+//! )?;
+//! assert!((result.x-0.4).abs() < 1e-6);
+//! assert_eq!(result.status, nlopt4r::Status::Converged);
+//! # Ok::<(), nlopt4r::Error>(())
+//! ```
 use crate::{
     Error, EvaluationCounts, Evaluator, StopOptions, TerminationReason, Tolerance, Vector,
     evaluate, finite, positive,
@@ -6,11 +20,16 @@ use crate::{
     vector,
 };
 
+/// Armijo sufficient-decrease backtracking controls.
 #[derive(Debug, Clone)]
 pub struct ArmijoOptions {
+    /// Positive finite initial trial length, default 1.
     pub initial_step: f64,
+    /// Multiply rejected step lengths by this factor in `(0,1)`, default 0.5.
     pub contraction: f64,
+    /// c1 in `f(x+a*d) <= f(x)+c1*a*g'd`, in `(0,1)`, default 0.2.
     pub sufficient_decrease: f64,
+    /// Positive trial allowance, default 60; no unchecked fallback after exhaustion.
     pub max_iterations: usize,
 }
 
@@ -43,14 +62,24 @@ impl ArmijoOptions {
     }
 }
 
+/// Accepted Armijo trial; does not contain a gradient.
 #[derive(Debug, Clone)]
 pub struct Step {
+    /// Accepted step length multiplying the supplied direction.
     pub alpha: f64,
+    /// Objective at the accepted point.
     pub value: f64,
     /// Number of trial evaluations.
     pub evaluations: usize,
 }
 
+/// Find an Armijo step along a finite dimension-correct descent direction.
+///
+/// Evaluates value/gradient at `x` once, then requests only values at trials.
+/// [`Step::evaluations`] excludes the origin call. This standalone helper does
+/// not enforce an outer objective budget; full solvers charge trials themselves.
+/// Invalid directions/options, non-finite trials, callback failures and
+/// exhausted backtracking are explicit errors.
 pub fn armijo<P: Evaluator + ?Sized>(
     problem: &P,
     x: &Vector<f64>,
@@ -108,27 +137,40 @@ where
     })
 }
 
+/// Derivative-free method for a continuous unimodal scalar bracket.
 #[derive(Debug, Clone, Copy)]
 pub enum ScalarMethod {
+    /// Golden-section interval reduction.
     GoldenSection,
     /// Safeguarded parabolic interpolation (Brent's method).
     Parabolic,
 }
 
+/// Best evaluated scalar point, remaining bracket and actual termination.
 #[derive(Debug, Clone)]
 pub struct ScalarSolution {
+    /// Returned scalar point.
     pub x: f64,
+    /// Objective at `x`.
     pub value: f64,
+    /// Remaining search interval.
     pub bracket: (f64, f64),
+    /// Completed scalar iterations.
     pub iterations: usize,
+    /// Interval convergence or a non-converged budget/iteration stop.
     pub status: crate::Status,
+    /// Detailed stop criterion.
     pub termination_reason: TerminationReason,
+    /// Attempted objective calls, including endpoint evaluations; no derivatives.
     pub evaluations: EvaluationCounts,
 }
 
+/// Scalar interval tolerance and shared iteration/objective allowances.
 #[derive(Debug, Clone)]
 pub struct ScalarOptions {
+    /// Shared controls; gradient tolerance is validated but not used for scalar optimality.
     pub stopping: StopOptions,
+    /// Mixed interval tolerance; defaults to absolute 1e-8 and relative sqrt(machine epsilon).
     pub interval_tolerance: Tolerance,
 }
 impl Default for ScalarOptions {
@@ -144,6 +186,10 @@ impl Default for ScalarOptions {
 }
 
 /// Minimize a continuous unimodal function on a finite closed interval.
+///
+/// Convenience wrapper using absolute `tolerance`, relative sqrt(machine epsilon),
+/// and the supplied iteration cap without an objective cap. Use
+/// [`minimize_scalar_with_options`] for strict evaluation budgets.
 pub fn minimize_scalar<F: Fn(f64) -> f64>(
     f: F,
     bounds: (f64, f64),
@@ -165,6 +211,14 @@ pub fn minimize_scalar<F: Fn(f64) -> f64>(
     minimize_scalar_with_options(f, bounds, method, &options)
 }
 
+/// Search a finite strictly increasing `(lower, upper)` interval, including
+/// its endpoints, without derivatives.
+///
+/// All callback values must be finite. Interval convergence is meaningful under
+/// the continuity/unimodality assumption, not a general global guarantee.
+/// A budget interrupted before enough evaluations returns a non-converged
+/// report if a valid point exists. Non-finite/input failures are explicit;
+/// scalar error checkpoints use a length-one vector and NaN gradient norm.
 pub fn minimize_scalar_with_options<F: Fn(f64) -> f64>(
     f: F,
     bounds: (f64, f64),

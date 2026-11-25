@@ -1,4 +1,9 @@
 //! Limited-memory BFGS with a scaled two-loop inverse-Hessian product.
+//!
+//! Stores correction pairs rather than an `n x n` matrix. Safeguarded strong-Wolfe
+//! steps preserve accepted value/gradient work; invalid curvature pairs are
+//! skipped. This is unconstrained L-BFGS, not L-BFGS-B.
+//! References: Nocedal (1980); Liu and Nocedal (1989).
 use std::collections::VecDeque;
 
 use crate::{
@@ -8,13 +13,18 @@ use crate::{
 
 use super::{StrongWolfeOptions, strong_wolfe};
 
+/// Limited-memory history, strong-Wolfe search and outer stopping settings.
 #[derive(Debug, Clone)]
 pub struct LbfgsOptions {
+    /// Shared gradient/budget/stagnation controls.
     pub stopping: StopOptions,
+    /// Strong-Wolfe parameters, rather than Armijo-only [`crate::Options`].
     pub line_search: StrongWolfeOptions,
     /// Maximum number of correction pairs; storage is O(history_size * dimension).
+    /// Positive, default 10. Larger histories use more memory and are not always faster.
     pub history_size: usize,
     /// Skip a pair unless s'y > tolerance * ||s|| * ||y||.
+    /// Finite in `[0,1)`, default 1e-10.
     pub curvature_tolerance: f64,
 }
 
@@ -30,6 +40,7 @@ impl Default for LbfgsOptions {
 }
 
 impl LbfgsOptions {
+    /// Check stopping/search options, positive history and valid curvature threshold.
     pub fn validate(&self) -> Result<(), Error> {
         self.stopping.validate()?;
         self.line_search.validate()?;
@@ -99,6 +110,17 @@ impl History {
     }
 }
 
+/// Minimize using limited-memory BFGS from a finite nonempty `x0`.
+///
+/// Requires an analytic gradient and a smooth objective defined at all unbounded
+/// line-search trials. Accepted combined evaluations are reused; no dense Hessian
+/// is requested. O(history_size * n) memory and two-loop work per iteration.
+/// Bad directions reset history and use steepest descent.
+///
+/// [`crate::Solution::converged`] tests absolute gradient norm. Budgets return a
+/// non-converged report; search/callback errors expose the last accepted checkpoint.
+/// Near machine-precision plateaus a strong-Wolfe search can fail rather than
+/// certify an overly tight tolerance. Optional stagnation controls are explicit.
 pub fn lbfgs<P: Evaluator + ?Sized>(
     problem: &P,
     x0: &Vector,
