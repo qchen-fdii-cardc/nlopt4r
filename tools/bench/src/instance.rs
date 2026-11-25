@@ -6,6 +6,15 @@ use nlopt4r::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Stable FNV-1a identity; shared by independent instance and observation-noise streams.
+pub(crate) fn problem_identity(problem: &str, dimension: usize) -> u64 {
+    let mut identity = 0xcbf29ce484222325u64;
+    for byte in problem.bytes().chain((dimension as u64).to_le_bytes()) {
+        identity = (identity ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    }
+    identity
+}
+
 /// Transformation of solver coordinates: `z = reference + Q*(x-reference-shift)`.
 ///
 /// The outer catalog box stays fixed. The recorded reference point plus `shift`
@@ -49,11 +58,7 @@ impl Transformation {
         if !shift_enabled && !rotation_enabled {
             return Ok(None);
         }
-        // Stable FNV-1a problem identity; do not use process-randomized hashers.
-        let mut identity = 0xcbf29ce484222325u64;
-        for byte in problem.id.bytes().chain((dimension as u64).to_le_bytes()) {
-            identity = (identity ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
+        let identity = problem_identity(problem.id, dimension);
         // Independent streams keep the shift identical when toggling rotation.
         let mut shift_rng = ChaCha8Rng::seed_from_u64(seed ^ identity);
         let mut rotation_rng = ChaCha8Rng::seed_from_u64(seed ^ identity ^ 0xa0761d6478bd642f);

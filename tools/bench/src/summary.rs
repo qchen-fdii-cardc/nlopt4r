@@ -1,6 +1,7 @@
 use crate::{
     catalog::CATALOG,
     instance::Transformation,
+    noise::{Distribution, NoiseOptions},
     runner::{ALGORITHMS, Environment, RunRecord},
 };
 use serde::Serialize;
@@ -18,10 +19,15 @@ pub struct Summary {
     pub target_value: f64,
     pub environment: Environment,
     pub transformation: Option<Transformation>,
+    pub noise: Option<NoiseOptions>,
+    pub derivative_mode: String,
     pub runs: usize,
     pub successes: usize,
     pub errors: usize,
     pub success_rate: f64,
+    /// Runs with a noise-free post-run score of the actual return/recovery point.
+    pub scored_recommendations: usize,
+    pub recommendation_successes: usize,
     /// Null if no successes: ERT is then infinite, not zero.
     pub ert_evaluations: Option<f64>,
     pub ert_seconds: Option<f64>,
@@ -36,6 +42,8 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
         target_bits: u64,
         environment: Environment,
         transformation: Option<InstanceKey>,
+        noise: Option<NoiseKey>,
+        derivative_mode: String,
     }
     #[derive(PartialEq, Eq, PartialOrd, Ord)]
     struct InstanceKey {
@@ -45,6 +53,13 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
         rotated: bool,
         shift_bits: Vec<u64>,
         rotation_bits: Vec<Vec<u64>>,
+    }
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct NoiseKey {
+        version: u32,
+        distribution: Distribution,
+        level_bits: u64,
+        seed: u64,
     }
     let mut groups: BTreeMap<Key, Vec<&RunRecord>> = BTreeMap::new();
     for r in records {
@@ -68,6 +83,13 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                         .map(|row| row.iter().map(|v| v.to_bits()).collect())
                         .collect(),
                 }),
+                noise: r.noise.as_ref().map(|n| NoiseKey {
+                    version: n.version,
+                    distribution: n.distribution,
+                    level_bits: n.standard_deviation.to_bits(),
+                    seed: n.seed,
+                }),
+                derivative_mode: r.derivative_mode.clone(),
             })
             .or_default()
             .push(r);
@@ -84,6 +106,8 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                     target_bits,
                     environment,
                     transformation: _,
+                    noise: _,
+                    derivative_mode,
                 },
                 runs,
             )| {
@@ -104,10 +128,24 @@ pub fn summarize(records: &[RunRecord]) -> Vec<Summary> {
                     target_value: f64::from_bits(target_bits),
                     environment,
                     transformation: runs[0].transformation.clone(),
+                    noise: runs[0].noise.clone(),
+                    derivative_mode,
                     runs: runs.len(),
                     successes,
                     errors: runs.iter().filter(|r| r.error.is_some()).count(),
                     success_rate: successes as f64 / runs.len() as f64,
+                    scored_recommendations: runs
+                        .iter()
+                        .filter(|r| r.recommendation.is_some())
+                        .count(),
+                    recommendation_successes: runs
+                        .iter()
+                        .filter(|r| {
+                            r.recommendation
+                                .as_ref()
+                                .is_some_and(|p| p.feasible && p.true_value <= r.target_value)
+                        })
+                        .count(),
                     ert_evaluations: if successes > 0 {
                         Some(evaluations / successes as f64)
                     } else {
@@ -225,7 +263,64 @@ fn validate(r: &RunRecord) -> Result<(), String> {
     if let Some(t) = &r.transformation {
         t.validate(problem, r.dimension)?;
     }
-    if !matches!(r.schema_version, 1 | 2)
+    if let Some(noise) = &r.noise {
+        noise.validate()?;
+        if !noise.enabled()
+            || r.schema_version != 3
+            || r.noise_stream_seed != Some(noise.stream_seed(&r.problem, r.dimension, r.seed))
+            || r.noise_draws > r.evaluations
+            || (r.error.is_none() && r.noise_draws != r.evaluations)
+            || r.validation_evaluations != usize::from(r.recommendation.is_some())
+        {
+            return Err("invalid noise configuration, stream or accounting".into());
+        }
+        for point in r
+            .recommendation
+            .iter()
+            .chain(r.observed_best.iter().map(|p| &p.point))
+        {
+            if point.x.len() != r.dimension
+                || point.x.iter().any(|x| !x.is_finite())
+                || !point.observed_value.is_finite()
+                || !point.true_value.is_finite()
+            {
+                return Err("invalid noisy point".into());
+            }
+            let base = r
+                .transformation
+                .as_ref()
+                .map(|t| t.to_base(problem, &point.x));
+            let base_x = base.as_deref().unwrap_or(&point.x);
+            let value = problem.value(base_x);
+            let feasible = point
+                .x
+                .iter()
+                .all(|x| *x >= problem.bounds.0 && *x <= problem.bounds.1)
+                && problem.violation(base_x) <= 1e-8;
+            if !value.is_finite()
+                || (value - point.true_value).abs() > 1e-10 * (1.0 + value.abs())
+                || feasible != point.feasible
+            {
+                return Err("noise-free point score disagrees with benchmark formula".into());
+            }
+        }
+        if r.observed_best.as_ref().is_some_and(|p| {
+            p.evaluation == 0
+                || p.evaluation > r.evaluations
+                || !p.point.feasible
+                || r.best_value.is_none_or(|best| best > p.point.true_value)
+        }) {
+            return Err("invalid best noisy observation".into());
+        }
+    } else if r.noise_stream_seed.is_some()
+        || r.noise_draws != 0
+        || r.observed_best.is_some()
+        || r.recommendation.is_some()
+        || r.validation_evaluations != 0
+    {
+        return Err("noise diagnostics present without enabled noise".into());
+    }
+    if !matches!(r.schema_version, 1..=3)
         || (r.schema_version == 1 && r.transformation.is_some())
         || r.budget == 0
         || r.evaluations > r.budget
@@ -413,5 +508,116 @@ mod tests {
                 hit.hit_evaluation.map(|v| v as f64)
             );
         }
+    }
+
+    #[test]
+    fn noisy_records_roundtrip_and_summaries_separate_models_levels_and_seeds() {
+        let environment = record().environment;
+        let mut config = Config {
+            noise: NoiseOptions {
+                distribution: Distribution::Gaussian,
+                standard_deviation: 0.01,
+                seed: 9,
+                ..Default::default()
+            },
+            budget_per_dimension: 20,
+            ..Default::default()
+        };
+        let a = run(&CATALOG[0], "bfgs", 0, &config, &environment).unwrap();
+        for csv in [false, true] {
+            let mut out = Vec::new();
+            if csv {
+                writeln!(out, "{CSV_HEADER}").unwrap();
+            }
+            write_record(&mut out, &a, csv).unwrap();
+            let parsed = read_records(std::io::Cursor::new(out), csv).unwrap();
+            assert_eq!(parsed[0].noise, a.noise);
+            assert_eq!(parsed[0].observed_best, a.observed_best);
+            assert_eq!(parsed[0].recommendation, a.recommendation);
+        }
+        let mut records = vec![record(), a.clone()];
+        for distribution in [Distribution::Uniform, Distribution::Laplace] {
+            config.noise.distribution = distribution;
+            records.push(run(&CATALOG[0], "bfgs", 0, &config, &environment).unwrap());
+        }
+        config.noise.standard_deviation = 0.1;
+        records.push(run(&CATALOG[0], "bfgs", 0, &config, &environment).unwrap());
+        config.noise.seed = 10;
+        records.push(run(&CATALOG[0], "bfgs", 0, &config, &environment).unwrap());
+        assert_eq!(summarize(&records).len(), 6);
+        let mut corrupt = a.clone();
+        corrupt.noise_stream_seed = Some(0);
+        assert!(validate(&corrupt).is_err());
+        corrupt = a.clone();
+        corrupt.recommendation.as_mut().unwrap().true_value = -1.0;
+        assert!(validate(&corrupt).is_err());
+        corrupt = a.clone();
+        corrupt.noise_draws = corrupt.evaluations + 1;
+        assert!(validate(&corrupt).is_err());
+        corrupt = a.clone();
+        corrupt.validation_evaluations = 0;
+        assert!(validate(&corrupt).is_err());
+        corrupt = a.clone();
+        corrupt.noise = None;
+        assert!(validate(&corrupt).is_err());
+        corrupt = a;
+        corrupt.schema_version = 2;
+        assert!(validate(&corrupt).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "external-pattern")]
+    fn visited_optimum_is_not_a_successful_noisy_recommendation() {
+        let config = Config {
+            noise: NoiseOptions {
+                distribution: Distribution::Gaussian,
+                standard_deviation: 100.0,
+                ..Default::default()
+            },
+            dimension: 2,
+            budget_per_dimension: 100,
+            ..Default::default()
+        };
+        let r = run(
+            &CATALOG[0],
+            "external-pattern",
+            0,
+            &config,
+            &record().environment,
+        )
+        .unwrap();
+        validate(&r).unwrap();
+        assert_eq!(r.hit_evaluation, Some(1));
+        assert!(r.evaluations > 1, "hidden target must not stop the solver");
+        assert!(r.recommendation.as_ref().unwrap().true_value > r.target_value);
+        let s = summarize(&[r]);
+        assert_eq!(s[0].successes, 1);
+        assert_eq!(s[0].scored_recommendations, 1);
+        assert_eq!(s[0].recommendation_successes, 0);
+    }
+
+    #[test]
+    fn overflowing_noise_retains_a_failed_record_without_invented_scores() {
+        let config = Config {
+            noise: NoiseOptions {
+                distribution: Distribution::Uniform,
+                standard_deviation: f64::MAX,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut errors = 0;
+        for seed in 0..10 {
+            let r = run(&CATALOG[0], "bfgs", seed, &config, &record().environment).unwrap();
+            validate(&r).unwrap();
+            if r.error.is_some() {
+                errors += 1;
+                assert!(r.evaluations <= r.budget);
+                let mut out = Vec::new();
+                write_record(&mut out, &r, false).unwrap();
+                read_records(std::io::Cursor::new(out), false).unwrap();
+            }
+        }
+        assert!(errors > 0);
     }
 }

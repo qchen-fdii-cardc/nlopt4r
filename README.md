@@ -27,6 +27,9 @@ native comparisons, coverage and known limitations.
 Benchmark runners support independent seeded shift/rotation switches with
 recorded coefficients; see the [instance protocol](docs/BENCHMARKS.md#optional-recorded-shifts-and-rotations)
 for paired orientation/center-bias comparisons.
+The main harness also supports optional seeded Gaussian, uniform and Laplace
+[evaluation noise](docs/BENCHMARKS.md#optional-reproducible-evaluation-noise),
+with configurable standard deviation and separate noise-free target/recommendation metrics.
 
 ## Generated API documentation
 

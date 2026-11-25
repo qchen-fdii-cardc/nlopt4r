@@ -78,3 +78,11 @@ jobs:
             --output target/transformed-smoke.jsonl
           cargo run --release --locked -p nlopt4r-bench -- \
             --summarize target/transformed-smoke.jsonl
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --suite smoke --algorithms de,pso \
+            --seeds 0..2 --dimension 2 --budget-per-dimension 2000 \
+            --shift on --rotate on --instance-seed 42 \
+            --noise gaussian --noise-level 0.01 --noise-seed 17 \
+            --output target/noisy-smoke.jsonl
+          cargo run --release --locked -p nlopt4r-bench -- \
+            --summarize target/noisy-smoke.jsonl
