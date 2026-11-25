@@ -1,7 +1,12 @@
 # nlopt4r
 
 A reusable, pure-Rust library implementing the optimization families.
- This is a dense solver library, **not** a binding to the unrelated upstream NLopt C library.
+This is a dense solver library, **not** a binding to the unrelated upstream NLopt C library.
+
+See the [improvement roadmap](docs/ROADMAP.md) for the proposed architecture,
+PSO/DE algorithms, benchmark suites, theory documentation and publication checklist.
+These additions are planned, not implemented. Publication has not been performed;
+a maintainer-approved license and source-provenance review remain release blockers.
 
 ## Use from another Rust application or library
 
@@ -39,8 +44,9 @@ cargo run --example rosenbrock
 ```
 
 `Vector` and `Matrix` are dynamically sized nalgebra `f64` types. There are no
-hard-coded objective functions, dimensions, globals, file I/O, native libraries,
-or runtime dependencies. Capturing/borrowing closures work. Implement `Objective`
+hard-coded objective functions, dimensions, globals, file I/O, or native runtime
+libraries. The runtime dependency is the pure-Rust `nalgebra` crate.
+Capturing/borrowing closures work. Implement `Objective`
 for application types, or pass `(value, gradient)` closures. Use
 `(value, gradient, hessian)` for Newton methods. Solvers accept borrowed trait
 objects as well as concrete problem types.
