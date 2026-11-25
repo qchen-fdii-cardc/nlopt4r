@@ -18,9 +18,9 @@
 pub mod bounded;
 pub mod constrained;
 pub mod core;
+pub mod derivative_free;
 mod evaluation;
 pub mod global;
-pub mod derivative_free;
 pub mod least_squares;
 pub mod line_search;
 pub mod local;

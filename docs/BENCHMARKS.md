@@ -15,6 +15,10 @@ cargo run -p nlopt4r-bench -- --summarize smoke.jsonl
 CARGO_BUILD_JOBS=2 cargo bench --bench kernels
 ```
 
+For a quick kernel check after dependencies have been built, use
+`CARGO_NET_OFFLINE=true cargo bench --bench kernels -- --test`; this avoids
+Criterion's startup metadata request waiting on unrelated registry downloads.
+
 `0..30` means seeds 0 through 29. Outputs ending in `.jsonl` or `.csv` are
 supported; existing files are never overwritten. CSV contains convenient
 scalar columns and a quoted, complete `record_json` column, preserving histories

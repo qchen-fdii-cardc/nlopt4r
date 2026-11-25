@@ -31,7 +31,22 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo +stable doc -p nlopt4r -p nlopt4r-bench -p nlopt4r-extension-example --no-deps
           cargo +stable test -p nlopt4r-bench
           cargo +stable run -p nlopt4r-extension-example
-          cargo +stable bench --bench kernels -- --test
+          CARGO_NET_OFFLINE=true cargo +stable bench --bench kernels -- --test
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.9.2 --locked
+          cargo llvm-cov -p nlopt4r --lcov --output-path target/coverage.lcov
+      - uses: actions/upload-artifact@v4
+        with:
+          name: library-coverage
+          path: target/coverage.lcov
 
   native-reference:
     runs-on: ubuntu-latest
