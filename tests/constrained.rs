@@ -1,26 +1,6 @@
 mod common;
-use common::{close, v};
+use common::{Ellipse, close, v};
 use nlopt4r::{Error, Matrix, Objective, Options, Status, Vector, constrained::*};
-
-struct Ellipse;
-impl Objective for Ellipse {
-    fn value(&self, x: &Vector) -> f64 {
-        (x[0] - 2.0).powi(2) + (x[1] - 1.0).powi(2)
-    }
-    fn gradient(&self, x: &Vector) -> Vector {
-        v(&[2.0 * (x[0] - 2.0), 2.0 * (x[1] - 1.0)])
-    }
-}
-impl ConstrainedProblem for Ellipse {
-    fn constraints(&self, x: &Vector) -> Constraints {
-        Constraints {
-            equalities: v(&[x[0] - 2.0 * x[1] + 1.0]),
-            inequalities: v(&[1.0 - 0.25 * x[0] * x[0] - x[1] * x[1]]),
-            equality_jacobian: Matrix::from_row_slice(1, 2, &[1.0, -2.0]),
-            inequality_jacobian: Matrix::from_row_slice(1, 2, &[-0.5 * x[0], -2.0 * x[1]]),
-        }
-    }
-}
 
 struct Cylinder;
 impl Objective for Cylinder {

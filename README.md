@@ -175,3 +175,36 @@ quadratic. Additional tests verify analytic optima, KKT conditions, derivative
 shapes, non-finite values, singular systems, indefinite trust regions, zero
 curvature, inactive inequalities, arbitrary dimensions and iteration limits.
 The tests do not require a MATLAB installation.
+
+### Comparison with crates.io NLopt
+
+The additional integration-test group in [tests/nlopt/](tests/nlopt/) compares
+`nlopt4r` against the crates.io [`nlopt`](https://crates.io/crates/nlopt) wrapper:
+
+```sh
+cargo test --test nlopt_comparison
+cargo test --release --test nlopt_comparison
+```
+
+It also runs as part of the default `cargo test`. The wrapper is a
+**dev-dependency only**: it does not change the pure-Rust library's runtime
+dependencies or downstream applications' build requirements. Building this
+repository's tests now requires **CMake and a C compiler** because the wrapper
+builds its bundled native NLopt library; a separate system NLopt installation
+is not needed.
+
+The group covers all unconstrained methods, scalar searches, Newton trust regions
+(including indefinite and hard-case subproblems), square and rectangular least
+squares, equality and active-set QP, exact equality methods, nonlinear SQP and
+PHR. Shared problems use identical objective functions and derivatives. The
+adapter negates inequalities and their gradients to translate `nlopt4r`'s
+`g(x) >= 0` convention into NLopt's `c(x) <= 0`.
+
+Comparisons check convergence, solution coordinates, objective values, and
+applicable feasibility/stationarity/complementarity conditions with explicit
+tolerances. NLopt failures and evaluation/time-budget exhaustion fail the tests.
+Known analytic solutions provide additional checks; indefinite trust subproblems
+use starts of both signs and compare objective values rather than demanding a
+unique step. NLopt's L-BFGS, truncated Newton and SLSQP methods serve as numerical
+references, not identical algorithm implementations. Stopping rules and iteration
+counts differ, so these are correctness comparisons, not performance benchmarks.

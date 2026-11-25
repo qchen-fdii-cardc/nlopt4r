@@ -7,3 +7,10 @@ readme = "README.md"
 
 [dependencies]
 nalgebra = "0.34"
+
+[dev-dependencies]
+nlopt = "0.8.1"
+
+[[test]]
+name = "nlopt_comparison"
+path = "tests/nlopt/main.rs"
