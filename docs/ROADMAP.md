@@ -1,9 +1,28 @@
 # nlopt4r improvement and release plan
 
-Assessment date: 2026-11-25. This document is a plan, not a claim that the
-proposed algorithms, modules, utilities or benchmark commands already exist.
+Assessment date: 2026-11-25. The design below is the original plan; the status
+checklist records what has actually been implemented and validated.
 Preserve the pure-Rust default library and its borrowed callback interfaces.
 Do not attempt to duplicate every NLopt algorithm before a first release.
+
+## Implementation status
+
+- [ ] M0 release gate: metadata/MSRV/dry-run/consumer checks passed; **blocked**
+  on maintainer-approved license and source redistribution confirmation.
+- [ ] M1 foundation and baseline:
+  - [x] Finite/fixed bounds, scaling, projection and seeded sampling.
+  - [x] Public checked evaluation context, strict budgets, target/cancellation,
+    fallible observers and value-only recovery.
+  - [x] External bounded pattern-search application using public utilities.
+  - [x] Native comparisons isolated in unpublished tooling; nine tests preserved.
+  - [ ] Compatibility local namespace, benchmark smoke runner and baseline.
+- [ ] M2 DE/PSO algorithms, conformance tests and 30-seed report.
+- [ ] M3 scalable local algorithms and measured complexity.
+- [ ] M4 numerical robustness and bounded local optimization.
+- [ ] M5 broad problem catalog, standardized adapters, theory, CI and coverage.
+
+Unchecked milestones are not complete; optional future algorithms and external
+licensed datasets are not implicitly completed by another solver.
 
 ## 1. Assessment against NLopt
 
@@ -356,10 +375,10 @@ let-chains (Rust 1.88+). Dependency MSRV alone is not package MSRV.
 Rust 1.88.0 was installed for validation without changing the default toolchain.
 Keep minimum-compiler testing in CI and review dependency updates against it.
 
-Default library consumers build pure Rust; today's repository `cargo test`
-still builds the dev-only native NLopt wrapper with CMake/C. Move that comparison
-to unpublished tooling at M1 so default tests become pure Rust too. Keep an
-explicit native-reference CI job and the existing comparison coverage.
+Default library consumers and default repository tests now build pure Rust.
+Native NLopt is isolated in `tools/nlopt-reference`; invoke
+`cargo test -p nlopt4r-reference` for the preserved nine comparisons.
+Keep an explicit native-reference CI job.
 
 Safe validation commands from the package directory:
 

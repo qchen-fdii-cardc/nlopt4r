@@ -1,0 +1,13 @@
+[package]
+name = "nlopt4r-reference"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+nlopt4r = { path = "../.." }
+nlopt = "0.8.1"
+
+[[test]]
+name = "nlopt_comparison"
+path = "../../tests/nlopt/main.rs"

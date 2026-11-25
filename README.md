@@ -5,8 +5,12 @@ This is a dense solver library, **not** a binding to the unrelated upstream NLop
 
 See the [improvement roadmap](docs/ROADMAP.md) for the proposed architecture,
 PSO/DE algorithms, benchmark suites, theory documentation and publication checklist.
-These additions are planned, not implemented. Publication has not been performed;
-a maintainer-approved license and source-provenance review remain release blockers.
+Implementation is tracked there with validated completion gates. Publication has
+not been performed; a maintainer-approved license and source-provenance review
+remain release blockers.
+
+The [foundation guide](docs/FOUNDATIONS.md) covers validated bounds, shared
+evaluation budgets, observers and the external algorithm extension example.
 
 ## Use from another Rust application or library
 
@@ -45,7 +49,7 @@ cargo run --example rosenbrock
 
 `Vector` and `Matrix` are dynamically sized nalgebra `f64` types. There are no
 hard-coded objective functions, dimensions, globals, file I/O, or native runtime
-libraries. The runtime dependency is the pure-Rust `nalgebra` crate.
+libraries. Runtime dependencies are pure-Rust `nalgebra` and seeded RNG crates.
 Capturing/borrowing closures work. Implement `Objective`
 for application types, or pass `(value, gradient)` closures. Use
 `(value, gradient, hessian)` for Newton methods. Solvers accept borrowed trait
@@ -301,16 +305,16 @@ The additional integration-test group in [tests/nlopt/](tests/nlopt/) compares
 `nlopt4r` against the crates.io [`nlopt`](https://crates.io/crates/nlopt) wrapper:
 
 ```sh
-cargo test --test nlopt_comparison
-cargo test --release --test nlopt_comparison
+cargo test -p nlopt4r-reference
+cargo test --release -p nlopt4r-reference
 ```
 
-It also runs as part of the default `cargo test`. The wrapper is a
-**dev-dependency only**: it does not change the pure-Rust library's runtime
-dependencies or downstream applications' build requirements. Building this
-repository's tests now requires **CMake and a C compiler** because the wrapper
-builds its bundled native NLopt library; a separate system NLopt installation
-is not needed.
+The wrapper is a dev-dependency of the **unpublished reference tooling crate**,
+not of the solver package. Default `cargo test` and downstream builds are
+pure Rust. Only the explicit reference command (or `cargo test --workspace`)
+requires **CMake and a C compiler** to build bundled native NLopt; a separate
+system NLopt installation is not needed. The test group retains its existing
+location and coverage.
 
 The group covers all unconstrained methods, scalar searches, Newton trust regions
 (including indefinite and hard-case subproblems), square and rectangular least

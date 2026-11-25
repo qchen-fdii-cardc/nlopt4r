@@ -12,10 +12,10 @@ categories = ["mathematics", "science"]
 
 [dependencies]
 nalgebra = "0.34"
+rand = { version = "0.9", default-features = false, features = ["std"] }
+rand_chacha = "0.9"
 
-[dev-dependencies]
-nlopt = "0.8.1"
-
-[[test]]
-name = "nlopt_comparison"
-path = "tests/nlopt/main.rs"
+[workspace]
+members = ["tools/nlopt-reference", "tools/extension"]
+default-members = ["."]
+resolver = "3"

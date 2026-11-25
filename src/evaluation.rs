@@ -57,6 +57,23 @@ impl<P: Objective + ?Sized> Evaluator for P {
 
 type HessianCallback = fn(&[f64]) -> Result<Matrix, EvaluationError>;
 
+/// Wrap a fallible value-only callback. Gradient requests are explicit errors.
+pub fn value_only<F>(
+    callback: F,
+) -> Function<impl Fn(&[f64], Option<&mut [f64]>) -> Result<f64, EvaluationError>>
+where
+    F: Fn(&[f64]) -> Result<f64, EvaluationError>,
+{
+    Function::new(move |x: &[f64], gradient: Option<&mut [f64]>| {
+        if gradient.is_some() {
+            return Err(EvaluationError::from(
+                "value-only callback cannot provide a gradient",
+            ));
+        }
+        callback(x)
+    })
+}
+
 pub struct Function<F, H = HessianCallback> {
     callback: F,
     hessian: Option<H>,

@@ -16,15 +16,19 @@
 //! ```
 
 pub mod constrained;
+pub mod core;
 mod evaluation;
 pub mod least_squares;
 pub mod line_search;
+pub mod problem;
 pub mod quadratic;
 mod stopping;
 pub mod trust_region;
 mod unconstrained;
+pub mod utils;
 
-pub use evaluation::{EvaluationError, Evaluator, Function};
+pub use evaluation::{EvaluationError, Evaluator, Function, value_only};
+pub use problem::Bounds;
 pub use stopping::{EvaluationCounts, StopOptions, TerminationReason, Tolerance};
 
 pub type Matrix<T = f64> = nalgebra::DMatrix<T>;
@@ -96,6 +100,12 @@ pub enum Error {
         iterations: usize,
     },
     EvaluationBudgetExceeded,
+    SearchStopped(core::SearchTermination),
+    SearchFailure {
+        source: Box<Error>,
+        last_point: Box<core::EvaluatedPoint>,
+        evaluations: EvaluationCounts,
+    },
     Evaluation {
         operation: &'static str,
         source: EvaluationError,
@@ -143,6 +153,16 @@ impl std::fmt::Display for Error {
                 "{solver} stopped after {iterations} iterations: {reason:?}"
             ),
             Self::EvaluationBudgetExceeded => write!(f, "objective evaluation budget exhausted"),
+            Self::SearchStopped(reason) => write!(f, "search stopped: {reason:?}"),
+            Self::SearchFailure {
+                source,
+                evaluations,
+                ..
+            } => write!(
+                f,
+                "search failed after {} objective evaluations: {source}",
+                evaluations.objective
+            ),
             Self::Evaluation { operation, source } => {
                 write!(f, "{operation} evaluation failed: {source}")
             }
@@ -163,6 +183,7 @@ impl std::error::Error for Error {
         match self {
             Self::Evaluation { source, .. } => Some(source),
             Self::SolverFailure { source, .. } => Some(source.as_ref()),
+            Self::SearchFailure { source, .. } => Some(source.as_ref()),
             _ => None,
         }
     }
@@ -171,12 +192,19 @@ impl Error {
     pub fn root_cause(&self) -> &Error {
         match self {
             Self::SolverFailure { source, .. } => source.root_cause(),
+            Self::SearchFailure { source, .. } => source.root_cause(),
             _ => self,
         }
     }
     pub fn last_solution(&self) -> Option<&Solution> {
         match self {
             Self::SolverFailure { last_solution, .. } => Some(last_solution),
+            _ => None,
+        }
+    }
+    pub fn last_point(&self) -> Option<&core::EvaluatedPoint> {
+        match self {
+            Self::SearchFailure { last_point, .. } => Some(last_point),
             _ => None,
         }
     }
