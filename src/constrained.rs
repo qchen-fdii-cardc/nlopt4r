@@ -279,6 +279,130 @@ pub enum Method {
     LagrangeSqp,
 }
 
+/// Opt-in feasibility restoration; legacy `minimize` retains its behavior.
+#[derive(Debug, Clone)]
+pub struct SqpOptions {
+    pub solver: ConstrainedOptions,
+    /// Iteration cap for each QP phase (phase I and the objective active set).
+    /// The whole-run synthetic evaluation cap also spans both phases.
+    pub max_subproblem_iterations: usize,
+    /// Total synthetic QP/restoration-model evaluations across the entire run.
+    pub max_subproblem_evaluations: usize,
+    pub max_restoration_iterations: usize,
+    /// Required fractional reduction in the squared constraint violation merit.
+    pub restoration_reduction: f64,
+    pub restoration_damping: f64,
+}
+
+impl Default for SqpOptions {
+    fn default() -> Self {
+        Self {
+            solver: ConstrainedOptions::default(),
+            max_subproblem_iterations: 1000,
+            max_subproblem_evaluations: 10000,
+            max_restoration_iterations: 100,
+            restoration_reduction: 0.1,
+            restoration_damping: 1e-3,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RestorationEvent {
+    pub iteration: usize,
+    /// Original infeasible QP error, including its synthetic checkpoint.
+    pub trigger: Error,
+    pub initial_violation: f64,
+    pub final_violation: f64,
+    pub iterations: usize,
+    /// None means restoration reduced feasibility merit and SQP resumed.
+    pub failure: Option<Error>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqpSolution {
+    pub constrained: ConstrainedSolution,
+    pub restoration: Vec<RestorationEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqpError {
+    pub source: Error,
+    pub restoration: Vec<RestorationEvent>,
+    /// Full outer checkpoint, including multipliers; absent before a valid state.
+    pub last_constrained: Option<Box<ConstrainedSolution>>,
+}
+
+impl std::fmt::Display for SqpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({} restoration events)",
+            self.source,
+            self.restoration.len()
+        )
+    }
+}
+impl std::error::Error for SqpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// SQP with a separate constraint-only restoration phase when its linearized
+/// QP is infeasible. No other objective solver is substituted.
+pub fn sqp_with_restoration<P: ConstrainedProblem + ?Sized>(
+    p: &P,
+    x0: &Vector,
+    options: &SqpOptions,
+) -> Result<SqpSolution, SqpError> {
+    let mut events = Vec::new();
+    let mut last_constrained = None;
+    let result = (|| {
+        options.solver.validate()?;
+        positive(options.restoration_damping, "restoration damping")?;
+        if options.max_subproblem_iterations == 0
+            || options.max_subproblem_evaluations == 0
+            || options.max_restoration_iterations == 0
+            || !options.restoration_reduction.is_finite()
+            || !(0.0..1.0).contains(&options.restoration_reduction)
+            || options.restoration_reduction == 0.0
+        {
+            return Err(Error::InvalidInput("SQP restoration options"));
+        }
+        initial(x0, &options.solver.solver.stopping)?;
+        let mut run = Run::new(&options.solver.solver.stopping)?;
+        let result = minimize_impl(
+            p,
+            x0,
+            Method::Sqp,
+            &options.solver,
+            &mut run,
+            Some((options, &mut events)),
+        );
+        last_constrained = run.last.clone().map(Box::new);
+        run.finish(result, "SQP with feasibility restoration")
+    })();
+    match result {
+        Ok(constrained) => Ok(SqpSolution {
+            constrained,
+            restoration: events,
+        }),
+        Err(source) => {
+            if let Some(last) = &mut last_constrained
+                && let Some(solution) = source.last_solution()
+            {
+                last.solution = solution.clone();
+            }
+            Err(SqpError {
+                source,
+                restoration: events,
+                last_constrained,
+            })
+        }
+    }
+}
+
 pub fn minimize<P: ConstrainedProblem + ?Sized>(
     p: &P,
     x0: &Vector,
@@ -288,7 +412,7 @@ pub fn minimize<P: ConstrainedProblem + ?Sized>(
     options.validate()?;
     initial(x0, &options.solver.stopping)?;
     let mut run = Run::new(&options.solver.stopping)?;
-    let result = minimize_impl(p, x0, method, options, &mut run);
+    let result = minimize_impl(p, x0, method, options, &mut run, None);
     run.finish(result, "constrained minimization")
 }
 
@@ -298,6 +422,7 @@ fn minimize_impl<P: ConstrainedProblem + ?Sized>(
     method: Method,
     options: &ConstrainedOptions,
     run: &mut Run<ConstrainedSolution>,
+    mut restoration: Option<(&SqpOptions, &mut Vec<RestorationEvent>)>,
 ) -> Result<ConstrainedSolution, Error> {
     let first = state(p, x0, None, run)?;
     let counts = (
@@ -385,14 +510,66 @@ fn minimize_impl<P: ConstrainedProblem + ?Sized>(
             inequalities: s.constraints.inequality_jacobian.clone(),
             inequality_rhs: -&s.constraints.inequalities,
         };
-        let qp_options = StopOptions {
+        let mut qp_options = StopOptions {
             gradient_tolerance: (0.01 * options.solver.stopping.gradient_tolerance).min(1e-8),
             max_iterations: options.solver.stopping.max_iterations,
             ..StopOptions::default()
         };
-        let q = quadratic::minimize(&qp, &Vector::zeros(n), &qp_options)?;
-        run.counts.subproblem += q.solution.evaluations.objective;
+        if let Some((settings, _)) = &restoration {
+            qp_options.max_iterations = settings.max_subproblem_iterations;
+            let remaining = settings
+                .max_subproblem_evaluations
+                .saturating_sub(run.counts.subproblem);
+            if remaining == 0 {
+                return Err(Error::SubproblemStopped {
+                    solver: "SQP synthetic budget",
+                    reason: TerminationReason::MaxEvaluations,
+                    iterations: k,
+                });
+            }
+            qp_options.max_evaluations = Some(remaining);
+        }
+        let q = quadratic::minimize(&qp, &Vector::zeros(n), &qp_options);
+        run.counts.subproblem += match &q {
+            Ok(q) => q.solution.evaluations.objective,
+            Err(error) => error.last_solution().map_or(0, |s| s.evaluations.objective),
+        };
+        let q = match q {
+            Err(trigger) if *trigger.root_cause() == Error::Infeasible => {
+                let Some((settings, events)) = restoration.as_mut() else {
+                    return Err(trigger);
+                };
+                let mut event = RestorationEvent {
+                    iteration: k,
+                    trigger,
+                    initial_violation: violation(&s.constraints),
+                    final_violation: violation(&s.constraints),
+                    iterations: 0,
+                    failure: None,
+                };
+                let result = restore(p, &x, &s, counts, settings, run, &mut event);
+                if let Err(error) = &result {
+                    event.failure = Some(error.clone());
+                }
+                events.push(event);
+                let (restored_x, restored_state) = result?;
+                x = restored_x;
+                first = Some(restored_state);
+                b = Matrix::identity(n, n);
+                mu.fill(0.0);
+                lambda.fill(0.0);
+                continue;
+            }
+            other => other?,
+        };
         if !q.solution.converged() {
+            if restoration.is_some() {
+                return Err(Error::SubproblemStopped {
+                    solver: "SQP quadratic subproblem",
+                    reason: q.solution.termination_reason,
+                    iterations: q.solution.iterations,
+                });
+            }
             return Err(Error::IterationLimit {
                 solver: "SQP quadratic subproblem",
                 iterations: q.solution.iterations,
@@ -425,12 +602,21 @@ fn minimize_impl<P: ConstrainedProblem + ?Sized>(
         );
         let merit = s.f + penalty * l1(&s.constraints);
         let slope = s.gradient.dot(&d) - penalty * l1(&s.constraints);
+        let use_cache = restoration.is_some();
+        let mut accepted_state = None;
         let step = line_search::backtrack(merit, slope, &options.solver.line_search, |alpha| {
             let next = state(p, &(&x + alpha * &d), Some(counts), run)?;
-            finite(next.f + penalty * l1(&next.constraints), "SQP merit")
+            let merit = finite(next.f + penalty * l1(&next.constraints), "SQP merit")?;
+            if use_cache {
+                accepted_state = Some(next);
+            }
+            Ok(merit)
         })?;
         let next_x = &x + step.alpha * d;
-        let next = state(p, &next_x, Some(counts), run)?;
+        let next = match accepted_state {
+            Some(next) => next,
+            None => state(p, &next_x, Some(counts), run)?,
+        };
         mu = (1.0 - step.alpha) * mu + step.alpha * q.equality_multipliers;
         lambda = (1.0 - step.alpha) * lambda + step.alpha * q.inequality_multipliers;
         let sk = &next_x - &x;
@@ -449,8 +635,132 @@ fn minimize_impl<P: ConstrainedProblem + ?Sized>(
             b = 0.5 * (&b + b.transpose());
         }
         x = next_x;
+        if use_cache {
+            run.checkpoint(report(
+                x.clone(),
+                &next,
+                mu.clone(),
+                lambda.clone(),
+                k + 1,
+                0,
+                false,
+            )?);
+            first = Some(next);
+        }
     }
     unreachable!()
+}
+
+fn feasibility_model(c: &Constraints) -> (Vector, Matrix) {
+    let active: Vec<usize> = c
+        .inequalities
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &v)| (v < 0.0).then_some(i))
+        .collect();
+    let ne = c.equalities.len();
+    let mut residual = Vector::zeros(ne + active.len());
+    let mut jacobian = Matrix::zeros(residual.len(), c.equality_jacobian.ncols());
+    residual.rows_mut(0, ne).copy_from(&c.equalities);
+    jacobian.rows_mut(0, ne).copy_from(&c.equality_jacobian);
+    for (row, &i) in active.iter().enumerate() {
+        residual[ne + row] = c.inequalities[i];
+        jacobian
+            .row_mut(ne + row)
+            .copy_from(&c.inequality_jacobian.row(i));
+    }
+    (residual, jacobian)
+}
+
+fn feasibility_merit(c: &Constraints) -> Result<f64, Error> {
+    finite(
+        0.5 * feasibility_model(c).0.norm_squared(),
+        "restoration merit",
+    )
+}
+
+fn restore<P: ConstrainedProblem + ?Sized>(
+    p: &P,
+    start: &Vector,
+    initial_state: &State,
+    counts: (usize, usize),
+    settings: &SqpOptions,
+    run: &mut Run<ConstrainedSolution>,
+    event: &mut RestorationEvent,
+) -> Result<(Vector, State), Error> {
+    let target =
+        (1.0 - settings.restoration_reduction) * feasibility_merit(&initial_state.constraints)?;
+    let mut x = start.clone();
+    // The initial state is borrowed; subsequent accepted states are owned.
+    let mut accepted: Option<State> = None;
+    for k in 0..settings.max_restoration_iterations {
+        let s = accepted.as_ref().unwrap_or(initial_state);
+        if run.counts.subproblem >= settings.max_subproblem_evaluations {
+            return Err(Error::SubproblemStopped {
+                solver: "SQP restoration model",
+                reason: TerminationReason::MaxEvaluations,
+                iterations: k,
+            });
+        }
+        run.counts.subproblem += 1;
+        let (r, j) = feasibility_model(&s.constraints);
+        let m = r.len();
+        let n = x.len();
+        let merit = feasibility_merit(&s.constraints)?;
+        let mut a = Matrix::zeros(m + n, n);
+        a.rows_mut(0, m).copy_from(&j);
+        for i in 0..n {
+            a[(m + i, i)] = settings.restoration_damping.sqrt();
+        }
+        let mut rhs = Vector::zeros(m + n);
+        rhs.rows_mut(0, m).copy_from(&(-&r));
+        let qr = a.qr();
+        qr.q_tr_mul(&mut rhs);
+        let d = qr
+            .r()
+            .solve_upper_triangular(&rhs.rows(0, n).into_owned())
+            .ok_or(Error::SingularSystem)?;
+        vector(&d, n, "restoration direction")?;
+        let slope = (j.transpose() * r).dot(&d);
+        if slope >= 0.0 {
+            return Err(Error::SubproblemStopped {
+                solver: "SQP feasibility restoration (no descent)",
+                reason: TerminationReason::StepStagnation,
+                iterations: k,
+            });
+        }
+        let mut trial_state = None;
+        let step =
+            line_search::backtrack(merit, slope, &settings.solver.solver.line_search, |alpha| {
+                let next = state(p, &(&x + alpha * &d), Some(counts), run)?;
+                let value = feasibility_merit(&next.constraints)?;
+                trial_state = Some(next);
+                Ok(value)
+            })?;
+        x += step.alpha * d;
+        let next = trial_state.ok_or(Error::InvalidInput("empty restoration line search"))?;
+        event.iterations = k + 1;
+        event.final_violation = violation(&next.constraints);
+        run.checkpoint(report(
+            x.clone(),
+            &next,
+            Vector::zeros(counts.0),
+            Vector::zeros(counts.1),
+            event.iteration,
+            event.iterations,
+            false,
+        )?);
+        if feasibility_merit(&next.constraints)? <= target
+            || event.final_violation <= settings.solver.feasibility_tolerance
+        {
+            return Ok((x, next));
+        }
+        accepted = Some(next);
+    }
+    Err(Error::IterationLimit {
+        solver: "SQP feasibility restoration",
+        iterations: settings.max_restoration_iterations,
+    })
 }
 
 fn augmented(

@@ -15,6 +15,7 @@
 //! # Ok::<(), nlopt4r::Error>(())
 //! ```
 
+pub mod bounded;
 pub mod constrained;
 pub mod core;
 mod evaluation;

@@ -16,6 +16,9 @@ search; run `cargo run --example global_search`.
 The [scalable local guide](docs/SCALABLE_LOCAL.md) describes strong-Wolfe
 L-BFGS, Newton-CG and matrix-free trust regions. Bounded pattern search and
 Nelder-Mead are available in `derivative_free` (also `local::derivative_free`).
+The [robustness guide](docs/ROBUSTNESS.md) covers adaptive QR least squares,
+projected gradients and explicit SQP restoration. [NIST verification](docs/NIST.md)
+checks QR LM against certified fitting data.
 
 ## Use from another Rust application or library
 

@@ -30,7 +30,12 @@ Do not attempt to duplicate every NLopt algorithm before a first release.
   - [x] Equal-target smoke measurements and native L-BFGS agreement.
   - [x] Local derivative-free pattern search and Nelder-Mead, fixed coordinates
     and partial-simplex evaluation budgets.
-- [ ] M4 numerical robustness and bounded local optimization.
+- [x] M4 numerical robustness:
+  - [x] Scaled adaptive QR LM with method-specific stopping/damping options.
+  - [x] Feasible projected gradient with gradient-mapping stationarity.
+  - [x] Explicit SQP restoration and full constrained error checkpoints.
+  - [x] Rectangular/rank-deficient/scaled, budget/failure and certified NIST
+    Misra1a regressions; legacy solver behavior retained.
 - [ ] M5 broad problem catalog, standardized adapters, theory, CI and coverage.
 
 Unchecked milestones are not complete; optional future algorithms and external
